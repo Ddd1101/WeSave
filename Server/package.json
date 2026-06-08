@@ -1,0 +1,16 @@
+{
+  "name": "family-asset-server",
+  "version": "1.0.0",
+  "description": "家庭资产管理系统后端（Express + SQLite）",
+  "main": "src/app.js",
+  "scripts": {
+    "dev": "node src/app.js",
+    "start": "node src/app.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "body-parser": "^1.20.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.1"
+  }
+}

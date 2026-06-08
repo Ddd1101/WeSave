@@ -1,0 +1,12 @@
+- [ ] Checkpoint 1: 数据库文件 `Server/data/assets.db` 存在且包含 `assets` 表；服务启动成功。
+- [ ] Checkpoint 2: `GET /api/assets` 返回 JSON 数组，每条包含 `id/category/name/value/purchase_date/purchase_price/remark/created_at/updated_at`。
+- [ ] Checkpoint 3: `POST /api/assets` 插入成功后 `GET` 能取到新条目；必填字段缺失返回 400。
+- [ ] Checkpoint 4: `PUT /api/assets/:id` 更新字段与 `updated_at`。
+- [ ] Checkpoint 5: `DELETE /api/assets/:id` 删除后再 `GET` 不再出现。
+- [ ] Checkpoint 6: 前端页面以表格展示，表头包含"资产类别/资产名称/当前价值/购买日期/购买价格/备注/占比"。
+- [ ] Checkpoint 7: 金额以人民币千分位格式（¥1,234.56）显示；百分比保留 2 位小数。
+- [ ] Checkpoint 8: 分类小计与总计数值正确；负值以醒目颜色/负号显示。
+- [ ] Checkpoint 9: "新增/编辑/删除" 弹窗交互可用，保存后列表即时刷新。
+- [ ] Checkpoint 10: 按关键字搜索、按类别筛选均能实时过滤，并在过滤后重新计算小计/总计。
+- [ ] Checkpoint 11: 重启 Node.js 服务后，先前录入的数据仍可通过 API 与前端页面取回。
+- [ ] Checkpoint 12: 网络失败或字段校验错误时前端弹出错误提示，体验友好。
