@@ -44,7 +44,20 @@ export function formatSignedPercent(value, digits = 2) {
 
 export function formatDate(value) {
   if (!value) return "-";
-  return String(value);
+  const s = String(value).trim();
+  // 纯年份（如 "2023"）→ "2023年"
+  if (/^\d{4}$/.test(s)) return s + "年";
+  // 年-月（如 "2023-06"）→ "2023年06月"
+  if (/^\d{4}-\d{1,2}$/.test(s)) {
+    const [y, m] = s.split("-");
+    return `${y}年${m.padStart(2, "0")}月`;
+  }
+  // 完整日期（如 "2023-06-09"、"2023/06/09"）→ "2023-06-09"
+  const m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) {
+    return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  }
+  return s;
 }
 
 export function todayStr() {

@@ -15,9 +15,9 @@ const defaultForm = () => ({
   id: null,
   category: '存款',
   name: '',
-  value: null,
+  value: '',
   purchase_date: '',
-  purchase_price: null,
+  purchase_price: '',
   remark: '',
 });
 
@@ -38,15 +38,15 @@ watch(
       Object.assign(form, defaultForm());
       Object.keys(errors).forEach((k) => delete errors[k]);
       if (props.record) {
-        Object.assign(form, {
-          id: props.record.id,
-          category: props.record.category || '存款',
-          name: props.record.name || '',
-          value: props.record.value,
-          purchase_date: props.record.purchase_date || '',
-          purchase_price: props.record.purchase_price,
-          remark: props.record.remark || '',
-        });
+        const r = props.record;
+        form.id = r.id || null;
+        form.category = r.category || '存款';
+        form.name = r.name || '';
+        form.value = r.value === null || r.value === undefined || r.value === '' ? '' : String(r.value);
+        form.purchase_date = r.purchase_date || '';
+        form.purchase_price =
+          r.purchase_price === null || r.purchase_price === undefined || r.purchase_price === '' ? '' : String(r.purchase_price);
+        form.remark = r.remark || '';
       }
     }
   },
@@ -57,10 +57,18 @@ function validate() {
   Object.keys(errors).forEach((k) => delete errors[k]);
   if (!form.category) errors.category = '请选择资产类别';
   if (!form.name || !String(form.name).trim()) errors.name = '请输入资产名称';
-  if (form.value === null || form.value === undefined || Number.isNaN(Number(form.value)))
+  const valueStr = String(form.value ?? '').trim();
+  if (valueStr === '' || Number.isNaN(Number(valueStr))) {
     errors.value = '当前价值必须为数字';
-  if (form.purchase_price !== null && form.purchase_price !== '' && form.purchase_price !== undefined) {
-    if (Number.isNaN(Number(form.purchase_price))) errors.purchase_price = '购买价格必须为数字';
+  }
+  const ppStr = String(form.purchase_price ?? '').trim();
+  if (ppStr !== '' && Number.isNaN(Number(ppStr))) {
+    errors.purchase_price = '购买价格必须为数字';
+  }
+  // 日期格式宽松：支持 YYYY / YYYY-MM / YYYY-MM-DD
+  const pd = String(form.purchase_date ?? '').trim();
+  if (pd !== '' && !/^\d{4}(-\d{1,2}(-\d{1,2})?)?$/.test(pd)) {
+    errors.purchase_date = '日期格式应为 YYYY 或 YYYY-MM 或 YYYY-MM-DD';
   }
   return Object.keys(errors).length === 0;
 }
@@ -69,14 +77,11 @@ async function submit() {
   if (!validate()) return;
   const payload = {
     category: form.category,
-    name: form.name,
+    name: String(form.name).trim(),
     value: Number(form.value),
-    purchase_date: form.purchase_date || null,
-    purchase_price:
-      form.purchase_price === '' || form.purchase_price === null
-        ? null
-        : Number(form.purchase_price),
-    remark: form.remark || null,
+    purchase_date: String(form.purchase_date ?? '').trim() || null,
+    purchase_price: String(form.purchase_price ?? '').trim() === '' ? null : Number(form.purchase_price),
+    remark: String(form.remark ?? '').trim() || null,
   };
   try {
     saving.value = true;
@@ -145,10 +150,10 @@ function close() {
               <div class="field-input money">
                 <span class="prefix">¥</span>
                 <input
-                  type="number"
-                  v-model.number="form.value"
+                  type="text"
+                  inputmode="decimal"
+                  v-model="form.value"
                   placeholder="0.00"
-                  step="100"
                 />
               </div>
               <p v-if="errors.value" class="error">{{ errors.value }}</p>
@@ -160,10 +165,10 @@ function close() {
               <div class="field-input money">
                 <span class="prefix">¥</span>
                 <input
-                  type="number"
-                  v-model.number="form.purchase_price"
+                  type="text"
+                  inputmode="decimal"
+                  v-model="form.purchase_price"
                   placeholder="可留空"
-                  step="100"
                 />
               </div>
               <p v-if="errors.purchase_price" class="error">{{ errors.purchase_price }}</p>
@@ -172,12 +177,14 @@ function close() {
 
           <!-- 购买日期 -->
           <div class="field">
-            <label class="label">购买日期（可选）</label>
+            <label class="label">购买日期（可选，支持 2023 / 2023-06 / 2023-06-09）</label>
             <input
-              type="date"
+              type="text"
               v-model="form.purchase_date"
+              placeholder="例如 2023 或 2023-06 或 2023-06-09"
               class="field-input"
             />
+            <p v-if="errors.purchase_date" class="error">{{ errors.purchase_date }}</p>
           </div>
 
           <!-- 备注 -->
