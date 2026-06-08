@@ -2,7 +2,7 @@ import axios from "axios";
 
 const http = axios.create({
   baseURL: "/api",
-  timeout: 8000,
+  timeout: 10000,
 });
 
 export function listAssets() {
@@ -19,4 +19,30 @@ export function updateAsset(id, payload) {
 
 export function deleteAsset(id) {
   return http.delete(`/assets/${id}`).then((r) => r.data);
+}
+
+// 按日期查询资产快照
+export function getSnapshot(date) {
+  return http.get("/assets/snapshot", { params: { date } }).then((r) => r.data);
+}
+
+// 按日期区间查询趋势
+export function getSnapshots({ start, end, granularity }) {
+  return http
+    .get("/assets/snapshots", { params: { start, end, granularity } })
+    .then((r) => r.data);
+}
+
+// 单项资产历史
+export function getAssetHistory(id, { start, end } = {}) {
+  return http
+    .get(`/assets/${id}/history`, { params: { start, end } })
+    .then((r) => r.data);
+}
+
+// 区间变化聚合
+export function getChanges({ start, end }) {
+  return http
+    .get("/assets/changes", { params: { start, end } })
+    .then((r) => r.data);
 }

@@ -1,5 +1,16 @@
 <script setup>
+import { ref } from 'vue';
 import AssetTable from './pages/AssetTable.vue';
+import SnapshotTable from './pages/SnapshotTable.vue';
+import Trends from './pages/Trends.vue';
+
+const activeTab = ref('current'); // current | snapshot | trends
+
+const tabs = [
+  { key: 'current', label: '当前资产', sub: 'ASSETS · TODAY' },
+  { key: 'snapshot', label: '历史快照', sub: 'SNAPSHOT · BY DATE' },
+  { key: 'trends', label: '趋势分析', sub: 'TRENDS · CHARTS' },
+];
 </script>
 
 <template>
@@ -15,20 +26,30 @@ import AssetTable from './pages/AssetTable.vue';
           <div class="brand-sub">Wealth · Stewardship · Clarity</div>
         </div>
       </div>
-      <div class="header-meta">
-        <div class="meta-item">
-          <div class="meta-label">资产净值</div>
-          <div class="meta-value">实时汇总</div>
-        </div>
-      </div>
+
+      <nav class="tabs" role="tablist">
+        <button
+          v-for="t in tabs"
+          :key="t.key"
+          class="tab"
+          :class="{ active: activeTab === t.key }"
+          @click="activeTab = t.key"
+          role="tab"
+        >
+          <span class="tab-label">{{ t.label }}</span>
+          <span class="tab-sub">{{ t.sub }}</span>
+        </button>
+      </nav>
     </header>
 
     <main class="app-main">
-      <AssetTable />
+      <AssetTable v-show="activeTab === 'current'" />
+      <SnapshotTable v-show="activeTab === 'snapshot'" />
+      <Trends v-show="activeTab === 'trends'" />
     </main>
 
     <footer class="app-foot">
-      <span>© Family Asset Ledger · 数据本地持久化</span>
+      <span>© Family Asset Ledger · 数据本地持久化 · 支持按日回溯</span>
     </footer>
   </div>
 </template>
@@ -100,9 +121,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 28px 48px;
+  padding: 24px 48px;
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(8px);
+  gap: 24px;
+  flex-wrap: wrap;
 }
 
 .brand {
@@ -119,15 +142,12 @@ body {
   place-items: center;
   background: linear-gradient(135deg, #d4af6a 0%, #b98644 100%);
   color: #1a1206;
-  box-shadow: 0 10px 30px -10px rgba(212, 175, 106, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  box-shadow: 0 10px 30px -10px rgba(212, 175, 106, 0.55),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.25);
   font-family: 'Noto Serif SC', serif;
 }
 
-.brand-glyph {
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: 1px;
-}
+.brand-glyph { font-size: 26px; font-weight: 700; letter-spacing: 1px; }
 
 .brand-text .brand-title {
   font-family: 'Noto Serif SC', serif;
@@ -145,24 +165,58 @@ body {
   margin-top: 2px;
 }
 
-.header-meta .meta-item {
-  text-align: right;
+/* Tabs */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 14px;
 }
 
-.header-meta .meta-label {
-  font-size: 11px;
-  letter-spacing: 3px;
+.tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: all 0.25s ease;
+  font-family: inherit;
+}
+
+.tab-label {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 2px;
+}
+
+.tab-sub {
+  font-size: 10px;
+  letter-spacing: 2px;
   color: var(--ink-3);
   text-transform: uppercase;
 }
 
-.header-meta .meta-value {
-  font-family: 'Noto Serif SC', serif;
-  color: var(--gold-2);
-  font-size: 14px;
-  letter-spacing: 2px;
-  margin-top: 2px;
+.tab:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink-1);
 }
+
+.tab.active {
+  background: linear-gradient(135deg, rgba(212, 175, 106, 0.18), rgba(212, 175, 106, 0.06));
+  border-color: rgba(212, 175, 106, 0.35);
+  color: var(--gold-2);
+  box-shadow: 0 8px 22px -10px rgba(212, 175, 106, 0.45);
+}
+.tab.active .tab-sub { color: var(--gold); }
 
 .app-main {
   position: relative;
@@ -178,5 +232,13 @@ body {
   font-size: 12px;
   padding: 24px;
   letter-spacing: 2px;
+}
+
+@media (max-width: 1024px) {
+  .app-header { padding: 20px 24px; }
+  .app-main { padding: 24px 24px 16px; }
+  .tab { padding: 8px 12px; }
+  .tab-label { font-size: 13px; }
+  .tab-sub { display: none; }
 }
 </style>

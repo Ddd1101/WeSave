@@ -26,4 +26,24 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS asset_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER,
+    action TEXT NOT NULL,
+    snapshot_date TEXT NOT NULL,
+    category TEXT NOT NULL,
+    name TEXT NOT NULL,
+    value REAL NOT NULL,
+    purchase_date TEXT,
+    purchase_price REAL,
+    remark TEXT,
+    change_amount REAL,
+    recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+db.exec(`CREATE INDEX IF NOT EXISTS idx_asset_history_date ON asset_history(snapshot_date);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_asset_history_asset ON asset_history(asset_id);`);
+
 module.exports = db;
