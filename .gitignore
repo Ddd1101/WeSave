@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.*
+
+# 数据库与缓存文件
+Server/data/*.db
+Server/data/*.db-shm
+Server/data/*.db-wal
