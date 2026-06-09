@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
 import { getSnapshot } from '../api/assets.js';
+import BatchForm from '../components/BatchForm.vue';
 import {
   formatCurrency,
   formatPercent,
@@ -12,6 +13,8 @@ import { useChart } from '../utils/useChart.js';
 const snapshotDate = ref(todayStr());
 const loading = ref(false);
 const snapshot = ref({ assets: [], total: 0, by_category: [] });
+
+const batchVisible = ref(false);
 
 async function load() {
   loading.value = true;
@@ -37,6 +40,14 @@ function goNext() {
 
 function goToday() {
   snapshotDate.value = todayStr();
+}
+
+function editThisDate() {
+  batchVisible.value = true;
+}
+
+function onBatchSaved() {
+  load();
 }
 
 const sorted = computed(() =>
@@ -157,6 +168,7 @@ watch(snapshotDate, async () => {
         <button class="btn ghost small" @click="goNext">下一天 ▶</button>
         <button class="btn primary small" @click="goToday">今日</button>
         <button class="btn ghost small" @click="load">刷新</button>
+        <button class="btn small edit-btn" @click="editThisDate">✎ 编辑该日</button>
       </div>
       <div class="tool-right">
         <span class="hint"
@@ -274,6 +286,12 @@ watch(snapshotDate, async () => {
         </div>
       </template>
     </section>
+
+    <BatchForm
+      v-model:visible="batchVisible"
+      :initial-date="snapshotDate"
+      @saved="onBatchSaved"
+    />
   </div>
 </template>
 

@@ -26,6 +26,18 @@ export function getSnapshot(date) {
   return http.get("/assets/snapshot", { params: { date } }).then((r) => r.data);
 }
 
+// 已录入过快照的所有日期（降序）
+export function listSnapshotDates() {
+  return http.get("/assets/dates").then((r) => r.data);
+}
+
+// 批量保存某天快照
+export function saveBatchSnapshot(date, assets) {
+  return http
+    .post("/assets/batch-snapshot", { assets }, { params: { date } })
+    .then((r) => r.data);
+}
+
 // 按日期区间查询趋势
 export function getSnapshots({ start, end, granularity }) {
   return http

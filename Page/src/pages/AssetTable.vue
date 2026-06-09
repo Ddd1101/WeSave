@@ -1,45 +1,104 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import AssetForm from '../components/AssetForm.vue';
-import { listAssets, deleteAsset } from '../api/assets.js';
-import { formatCurrency, formatPercent, formatDate } from '../utils/format.js';
+import { ref, computed, onMounted, watch } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import AssetForm from "../components/AssetForm.vue";
+import BatchForm from "../components/BatchForm.vue";
+import {
+  getSnapshot,
+  listSnapshotDates,
+  deleteAsset,
+} from "../api/assets.js";
+import {
+  formatCurrency,
+  formatPercent,
+  formatDate,
+  todayStr,
+} from "../utils/format.js";
 
-const tableData = ref([]);
+const snapshotDates = ref([]);
+const selectedDate = ref(todayStr());
+const snapshot = ref({ assets: [], total: 0, by_category: [] });
 const loading = ref(false);
-const keyword = ref('');
-const categoryFilter = ref('');
+const keyword = ref("");
+const categoryFilter = ref("");
+
+// 单项编辑/删除（兼容旧行为）
 const formVisible = ref(false);
 const editingItem = ref(null);
 
-async function load() {
+// 批量录入弹窗
+const batchVisible = ref(false);
+const batchInitialDate = ref("");
+
+async function loadDates() {
+  try {
+    const data = await listSnapshotDates();
+    const list = (data && data.dates) || [];
+    snapshotDates.value = list;
+    if (list.length > 0 && !list.includes(selectedDate.value)) {
+      selectedDate.value = list[0];
+    }
+  } catch (e) {
+    snapshotDates.value = [];
+  }
+}
+
+async function loadSnapshot() {
   loading.value = true;
   try {
-    const list = await listAssets();
-    tableData.value = Array.isArray(list) ? list : [];
+    const data = await getSnapshot(selectedDate.value);
+    snapshot.value = data;
   } catch (e) {
-    ElMessage.error('加载资产列表失败：' + (e.message || e));
+    ElMessage.error("加载快照失败：" + (e.message || e));
+    snapshot.value = { assets: [], total: 0, by_category: [] };
   } finally {
     loading.value = false;
   }
 }
 
+async function initialLoad() {
+  await loadDates();
+  if (snapshotDates.value.length === 0) {
+    // 完全没有历史数据：展示空态
+    snapshot.value = { assets: [], total: 0, by_category: [] };
+    return;
+  }
+  await loadSnapshot();
+}
+
+function openBatchForm(targetDate) {
+  batchInitialDate.value = targetDate || selectedDate.value || todayStr();
+  batchVisible.value = true;
+}
+
+function editSelectedDate() {
+  openBatchForm(selectedDate.value);
+}
+
+function onBatchSaved(res) {
+  // 保存后刷新日期列表 & 当前快照
+  if (res && res.date) {
+    selectedDate.value = res.date;
+  }
+  loadDates().then(loadSnapshot);
+}
+
 const categories = computed(() => {
   const set = new Set();
-  tableData.value.forEach((row) => row.category && set.add(row.category));
+  snapshot.value.assets.forEach((row) => row.category && set.add(row.category));
   return Array.from(set);
 });
 
 const filteredRows = computed(() => {
   const kw = keyword.value.trim().toLowerCase();
   const cat = categoryFilter.value;
-  return tableData.value.filter((row) => {
+  return snapshot.value.assets.filter((row) => {
     if (cat && row.category !== cat) return false;
     if (!kw) return true;
     return (
-      (row.name || '').toLowerCase().includes(kw) ||
-      (row.remark || '').toLowerCase().includes(kw) ||
-      (row.category || '').toLowerCase().includes(kw)
+      (row.name || "").toLowerCase().includes(kw) ||
+      (row.remark || "").toLowerCase().includes(kw) ||
+      (row.category || "").toLowerCase().includes(kw)
     );
   });
 });
@@ -53,11 +112,14 @@ const groupSummary = computed(() => {
 });
 
 const total = computed(() =>
-  filteredRows.value.reduce((s, r) => s + Number(r.value || 0), 0),
+  filteredRows.value.reduce((s, r) => s + Number(r.value || 0), 0)
 );
 
 const maxAbsValue = computed(() =>
-  filteredRows.value.reduce((m, r) => Math.max(m, Math.abs(Number(r.value || 0))), 0),
+  filteredRows.value.reduce(
+    (m, r) => Math.max(m, Math.abs(Number(r.value || 0))),
+    0
+  )
 );
 
 const percentOf = (row) => {
@@ -66,25 +128,38 @@ const percentOf = (row) => {
   return (Number(row.value || 0) / base) * 100;
 };
 
-const categoryChips = computed(() => {
+const heroChips = computed(() => {
   const out = [];
-  const map = new Map();
-  filteredRows.value.forEach((r) => {
-    const cur = map.get(r.category) || { name: r.category, sum: 0, count: 0 };
-    cur.sum += Number(r.value || 0);
-    cur.count += 1;
-    map.set(r.category, cur);
+  snapshot.value.by_category.forEach((c) => {
+    out.push(c);
   });
-  map.forEach((v) => out.push(v));
-  out.sort((a, b) => b.sum - a.sum);
   return out;
 });
 
-function handleAdd() {
-  editingItem.value = null;
-  formVisible.value = true;
+function valueTone(row) {
+  const v = Number(row.value);
+  if (!Number.isFinite(v)) return "neutral";
+  if (v < 0) return "neg";
+  if (v === 0) return "neutral";
+  return "pos";
 }
 
+function barWidth(row) {
+  if (maxAbsValue.value === 0) return "0%";
+  const ratio = Math.abs(Number(row.value || 0)) / maxAbsValue.value;
+  return Math.max(2, ratio * 100).toFixed(2) + "%";
+}
+
+function categoryClass(name) {
+  const map = {
+    存款: "cat-deposit",
+    投资资产: "cat-invest",
+    其他资产: "cat-other",
+  };
+  return map[name] || "cat-default";
+}
+
+// 单项编辑
 function handleEdit(row) {
   editingItem.value = { ...row };
   formVisible.value = true;
@@ -92,96 +167,52 @@ function handleEdit(row) {
 
 async function handleDelete(row) {
   try {
-    await ElMessageBox.confirm(`确认删除 "${row.name}" 吗？此操作不可恢复。`, '删除确认', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-    });
+    await ElMessageBox.confirm(
+      `确认删除 "${row.name}" 吗？将从资产主表中移除；当前日期的快照将在下次录入时更新。`,
+      "删除确认",
+      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }
+    );
     await deleteAsset(row.id);
-    ElMessage.success('已删除');
-    load();
+    ElMessage.success("已删除");
+    await loadSnapshot();
   } catch (e) {
-    if (e !== 'cancel' && !(e && e.action === 'cancel')) {
-      ElMessage.error('删除失败：' + (e.message || e));
+    if (e !== "cancel" && !(e && e.action === "cancel")) {
+      ElMessage.error("删除失败：" + (e.message || e));
     }
   }
 }
 
 function onSaved() {
   formVisible.value = false;
-  load();
+  loadSnapshot();
 }
 
-function valueTone(row) {
-  const v = Number(row.value);
-  if (!Number.isFinite(v)) return 'neutral';
-  if (v < 0) return 'neg';
-  if (v === 0) return 'neutral';
-  return 'pos';
-}
+watch(selectedDate, loadSnapshot);
 
-function barWidth(row) {
-  if (maxAbsValue.value === 0) return '0%';
-  const ratio = Math.abs(Number(row.value || 0)) / maxAbsValue.value;
-  return Math.max(2, ratio * 100).toFixed(2) + '%';
-}
-
-function categoryClass(name) {
-  const map = { 存款: 'cat-deposit', 投资资产: 'cat-invest', 其他资产: 'cat-other' };
-  return map[name] || 'cat-default';
-}
-
-onMounted(load);
+onMounted(initialLoad);
 </script>
 
 <template>
   <div class="page">
-    <!-- 总资产卡片 -->
-    <section class="hero">
-      <div class="hero-card hero-main">
-        <div class="hero-sub">NET WORTH · 净资产总额</div>
-        <div class="hero-amount">
-          <span class="currency">¥</span>
-          <span class="number">{{ formatCurrency(total).replace('¥', '') }}</span>
-        </div>
-        <div class="hero-foot">
-          <span>{{ filteredRows.length }} 项记录</span>
-          <span class="dot" />
-          <span>{{ categories.length }} 个分类</span>
-        </div>
-      </div>
-
-      <div
-        v-for="(chip, i) in categoryChips"
-        :key="chip.name"
-        class="hero-card hero-chip"
-        :class="categoryClass(chip.name)"
-        :style="{ animationDelay: (60 + i * 70) + 'ms' }"
-      >
-        <div class="chip-top">
-          <span class="chip-name">{{ chip.name }}</span>
-          <span class="chip-count">{{ chip.count }} 项</span>
-        </div>
-        <div class="chip-value" :class="valueTone(chip)">{{ formatCurrency(chip.sum) }}</div>
-        <div class="chip-bar">
-          <span
-            class="chip-bar-fill"
-            :style="{ width: Math.max(4, (Math.abs(chip.sum) / (Math.abs(total.value) || 1)) * 100) + '%' }"
-          />
-        </div>
-        <div class="chip-percent">
-          占比 {{ formatPercent((chip.sum / (Math.abs(total.value) || 1)) * 100) }}
-        </div>
-      </div>
-    </section>
-
-    <!-- 操作栏 -->
-    <section class="toolbar">
-      <div class="toolbar-left">
-        <button class="btn primary" @click="handleAdd">
-          <span class="plus">＋</span>新增资产
+    <!-- 操作入口 -->
+    <section class="action-bar">
+      <div class="action-left">
+        <button class="btn primary" @click="openBatchForm()">
+          <span class="plus">＋</span> 录入 / 编辑 今日资产（批量）
         </button>
-        <button class="btn ghost" @click="load">刷新</button>
+        <div class="date-selector">
+          <label class="label">按日期查看</label>
+          <select v-model="selectedDate" class="select" :disabled="loading">
+            <option v-for="d in snapshotDates" :key="d" :value="d">
+              {{ formatDate(d) }}
+            </option>
+          </select>
+          <button class="btn ghost small" @click="editSelectedDate" :disabled="snapshotDates.length === 0">
+            编辑该日
+          </button>
+        </div>
+      </div>
+      <div class="action-right">
         <div class="input-group">
           <span class="input-icon">⌕</span>
           <input
@@ -194,9 +225,51 @@ onMounted(load);
           <option value="">全部类别</option>
           <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
         </select>
+        <button class="btn ghost" @click="loadSnapshot">刷新</button>
       </div>
-      <div class="toolbar-right">
-        <span class="hint">共 {{ filteredRows.length }} 项 · 总额 {{ formatCurrency(total) }}</span>
+    </section>
+
+    <!-- 总资产卡片 -->
+    <section class="hero">
+      <div class="hero-card hero-main">
+        <div class="hero-sub">NET WORTH · 净资产总额</div>
+        <div class="hero-amount">
+          <span class="currency">¥</span>
+          <span class="number">{{ formatCurrency(snapshot.total).replace("¥", "") }}</span>
+        </div>
+        <div class="hero-foot">
+          <span>{{ snapshot.assets.length }} 项记录</span>
+          <span class="dot" />
+          <span>{{ snapshot.by_category.length }} 个分类</span>
+          <span class="dot" />
+          <span class="date-label">{{ formatDate(selectedDate) }}</span>
+        </div>
+      </div>
+
+      <div
+        v-for="(chip, i) in heroChips"
+        :key="chip.category"
+        class="hero-card hero-chip"
+        :class="categoryClass(chip.category)"
+        :style="{ animationDelay: (60 + i * 70) + 'ms' }"
+      >
+        <div class="chip-top">
+          <span class="chip-name">{{ chip.category }}</span>
+        </div>
+        <div class="chip-value">{{ formatCurrency(chip.sum) }}</div>
+        <div class="chip-bar">
+          <span
+            class="chip-bar-fill"
+            :style="{
+              width:
+                Math.max(4, (Math.abs(chip.sum) / (Math.abs(snapshot.total) || 1)) * 100) +
+                '%',
+            }"
+          />
+        </div>
+        <div class="chip-percent">
+          占比 {{ formatPercent((chip.sum / (Math.abs(snapshot.total) || 1)) * 100) }}
+        </div>
       </div>
     </section>
 
@@ -219,34 +292,50 @@ onMounted(load);
           <div class="empty-text">加载中…</div>
         </div>
 
+        <div v-else-if="snapshot.assets.length === 0" class="empty">
+          <div class="empty-glyph">◇</div>
+          <div class="empty-text">暂无资产快照 · 请点击上方「批量录入」</div>
+          <button class="btn primary small" @click="openBatchForm">录入今日资产</button>
+        </div>
+
         <div v-else-if="filteredRows.length === 0" class="empty">
           <div class="empty-glyph">◇</div>
-          <div class="empty-text">暂无资产记录</div>
-          <button class="btn primary small" @click="handleAdd">新增第一项</button>
+          <div class="empty-text">没有匹配的记录</div>
         </div>
 
         <template v-else>
           <div
             v-for="(row, idx) in filteredRows"
-            :key="row.id"
+            :key="row.id || row.name + idx"
             class="row"
             :class="{ 'row-even': idx % 2 === 1 }"
             :style="{ animationDelay: (idx * 25) + 'ms' }"
           >
             <div class="col col-cat">
-              <span class="pill" :class="categoryClass(row.category)">{{ row.category }}</span>
+              <span class="pill" :class="categoryClass(row.category)">
+                {{ row.category }}
+              </span>
             </div>
             <div class="col col-name">
               <div class="name">{{ row.name }}</div>
-              <div class="name-sub">id · {{ row.id }}</div>
+              <div v-if="row.change_amount != null" class="name-sub">
+                变动 {{ row.change_amount >= 0 ? "+" : "" }}
+                {{ formatCurrency(row.change_amount).replace("¥", "¥") }}
+              </div>
             </div>
             <div class="col col-value align-right">
-              <div class="value" :class="valueTone(row)">{{ formatCurrency(row.value) }}</div>
+              <div class="value" :class="valueTone(row)">
+                {{ formatCurrency(row.value) }}
+              </div>
             </div>
             <div class="col col-share">
               <div class="share-row">
                 <div class="share-bar">
-                  <span class="share-fill" :class="valueTone(row)" :style="{ width: barWidth(row) }" />
+                  <span
+                    class="share-fill"
+                    :class="valueTone(row)"
+                    :style="{ width: barWidth(row) }"
+                  />
                 </div>
                 <span class="share-num" :class="valueTone(row)">
                   {{ formatPercent(percentOf(row)) }}
@@ -255,9 +344,9 @@ onMounted(load);
             </div>
             <div class="col col-date subtle">{{ formatDate(row.purchase_date) }}</div>
             <div class="col col-price align-right subtle">
-              {{ row.purchase_price !== null && row.purchase_price !== undefined && row.purchase_price !== '' ? formatCurrency(row.purchase_price) : '—' }}
+              {{ row.purchase_price != null && row.purchase_price !== "" ? formatCurrency(row.purchase_price) : "—" }}
             </div>
-            <div class="col col-note subtle">{{ row.remark || '—' }}</div>
+            <div class="col col-note subtle">{{ row.remark || "—" }}</div>
             <div class="col col-action align-right">
               <button class="link" @click="handleEdit(row)">编辑</button>
               <button class="link danger" @click="handleDelete(row)">删除</button>
@@ -266,7 +355,6 @@ onMounted(load);
         </template>
       </div>
 
-      <!-- 汇总条 -->
       <div v-if="filteredRows.length > 0" class="summary">
         <div class="summary-main">
           <span class="pill total-pill">合计</span>
@@ -279,13 +367,19 @@ onMounted(load);
         </div>
         <div class="summary-breakdown">
           <span v-for="(sum, cat) in groupSummary" :key="cat" class="mini-sum">
-            <i class="dot" :class="categoryClass(cat)" />{{ cat }}：<b>{{ formatCurrency(sum) }}</b>
+            <i class="dot" :class="categoryClass(cat)" />{{ cat }}：
+            <b>{{ formatCurrency(sum) }}</b>
           </span>
         </div>
       </div>
     </section>
 
     <AssetForm v-model:visible="formVisible" :record="editingItem" @saved="onSaved" />
+    <BatchForm
+      v-model:visible="batchVisible"
+      :initial-date="batchInitialDate"
+      @saved="onBatchSaved"
+    />
   </div>
 </template>
 
@@ -293,7 +387,7 @@ onMounted(load);
 .page {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
   animation: fadeUp 0.5s ease both;
 }
 
@@ -302,7 +396,134 @@ onMounted(load);
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Hero 汇总卡片 */
+/* 操作栏 */
+.action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  flex-wrap: wrap;
+}
+
+.action-left,
+.action-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: #8a93ad;
+  text-transform: uppercase;
+}
+
+.date-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+  color: #c8cfe2;
+  padding: 9px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: transform 0.2s, background 0.2s, border-color 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: linear-gradient(135deg, #d4af6a, #b98644);
+  color: #1a1206;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  font-weight: 600;
+  box-shadow: 0 10px 24px -12px rgba(212, 175, 106, 0.55);
+}
+
+.btn.ghost { background: transparent; }
+
+.btn.small {
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+.plus {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 700;
+}
+
+.input-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.input-icon {
+  position: absolute;
+  left: 12px;
+  color: #8a93ad;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.input,
+.select {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #e9ecf5;
+  padding: 9px 12px 9px 32px;
+  border-radius: 10px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
+  font-family: inherit;
+  min-width: 160px;
+}
+
+.select {
+  padding: 9px 30px 9px 12px;
+  min-width: 120px;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #8a93ad 50%),
+    linear-gradient(135deg, #8a93ad 50%, transparent 50%);
+  background-position: calc(100% - 18px) 14px, calc(100% - 12px) 14px;
+  background-size: 6px 6px;
+  background-repeat: no-repeat;
+  background-color: rgba(0, 0, 0, 0.25);
+}
+
+.input:focus,
+.select:focus {
+  border-color: #d4af6a;
+  background: rgba(212, 175, 106, 0.06);
+}
+
+/* Hero 卡片 */
 .hero {
   display: grid;
   grid-template-columns: 1.6fr repeat(3, 1fr);
@@ -313,29 +534,33 @@ onMounted(load);
   position: relative;
   padding: 20px 22px;
   border-radius: 16px;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: #121829;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   overflow: hidden;
-  transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+  transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
   animation: fadeUp 0.55s ease both;
   min-width: 0;
 }
 
 .hero-card:hover {
   transform: translateY(-2px);
-  border-color: var(--line-strong);
+  border-color: rgba(212, 175, 106, 0.25);
   box-shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.6);
 }
 
 .hero-main {
-  background:
-    linear-gradient(135deg, rgba(212, 175, 106, 0.18), rgba(212, 175, 106, 0.04) 45%, transparent 80%),
+  background: linear-gradient(
+      135deg,
+      rgba(212, 175, 106, 0.18),
+      rgba(212, 175, 106, 0.04) 45%,
+      transparent 80%
+    ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
   border: 1px solid rgba(212, 175, 106, 0.35);
 }
 
 .hero-main::before {
-  content: '';
+  content: "";
   position: absolute;
   right: -40px;
   top: -40px;
@@ -348,7 +573,7 @@ onMounted(load);
 .hero-sub {
   font-size: 11px;
   letter-spacing: 4px;
-  color: var(--ink-2);
+  color: #8a93ad;
   text-transform: uppercase;
 }
 
@@ -361,17 +586,16 @@ onMounted(load);
 
 .hero-amount .currency {
   font-size: 20px;
-  color: var(--gold);
-  font-family: 'Noto Serif SC', serif;
+  color: #f5d98a;
+  font-family: "Noto Serif SC", serif;
 }
 
 .hero-amount .number {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 34px;
   font-weight: 700;
   letter-spacing: 1px;
   color: #fff;
-  text-shadow: 0 0 40px rgba(212, 175, 106, 0.25);
   overflow-wrap: anywhere;
   word-break: break-all;
 }
@@ -381,7 +605,7 @@ onMounted(load);
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--ink-2);
+  color: #8a93ad;
   font-size: 12px;
   flex-wrap: wrap;
 }
@@ -390,15 +614,18 @@ onMounted(load);
   width: 3px;
   height: 3px;
   border-radius: 50%;
-  background: var(--ink-3);
+  background: #5b6478;
 }
 
-/* 分类卡片 */
-.hero-chip .chip-top {
+.date-label {
+  color: #f5d98a;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.chip-top {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  color: var(--ink-2);
+  color: #8a93ad;
   font-size: 12px;
   letter-spacing: 2px;
   text-transform: uppercase;
@@ -411,26 +638,16 @@ onMounted(load);
   white-space: nowrap;
 }
 
-.chip-count {
-  font-family: 'JetBrains Mono', monospace;
-  color: var(--ink-3);
-  font-size: 11px;
-  flex-shrink: 0;
-}
-
 .chip-value {
   margin-top: 10px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 22px;
   font-weight: 700;
   letter-spacing: 0.5px;
   overflow-wrap: anywhere;
   word-break: break-all;
+  color: #e9ecf5;
 }
-
-.chip-value.pos { color: var(--emerald); }
-.chip-value.neg { color: var(--rose); }
-.chip-value.neutral { color: var(--ink-1); }
 
 .chip-bar {
   margin-top: 12px;
@@ -444,7 +661,7 @@ onMounted(load);
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--gold) 0%, var(--gold-2) 100%);
+  background: linear-gradient(90deg, #d4af6a, #f5d98a);
   transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -455,136 +672,14 @@ onMounted(load);
 .chip-percent {
   margin-top: 8px;
   font-size: 12px;
-  color: var(--ink-2);
+  color: #8a93ad;
   letter-spacing: 1px;
-}
-
-/* 工具栏 */
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 18px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  gap: 12px;
-}
-
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.toolbar-right {
-  flex-shrink: 0;
-}
-
-.toolbar-right .hint {
-  color: var(--ink-2);
-  font-size: 12px;
-  letter-spacing: 1px;
-  font-family: 'JetBrains Mono', monospace;
-}
-
-.btn {
-  border: 1px solid var(--line-strong);
-  background: rgba(255, 255, 255, 0.02);
-  color: var(--ink-1);
-  padding: 9px 16px;
-  border-radius: 10px;
-  font-size: 13px;
-  letter-spacing: 1px;
-  cursor: pointer;
-  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.btn:hover {
-  transform: translateY(-1px);
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.btn.primary {
-  background: linear-gradient(135deg, #d4af6a, #b98644);
-  color: #1a1206;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  font-weight: 600;
-  box-shadow: 0 10px 24px -12px rgba(212, 175, 106, 0.55);
-}
-
-.btn.primary:hover {
-  box-shadow: 0 14px 30px -12px rgba(212, 175, 106, 0.7);
-}
-
-.btn.ghost {
-  background: transparent;
-}
-
-.btn.small {
-  padding: 7px 12px;
-  font-size: 12px;
-}
-
-.plus {
-  font-family: 'JetBrains Mono', monospace;
-  font-weight: 700;
-}
-
-.input-group {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.input-icon {
-  position: absolute;
-  left: 12px;
-  color: var(--ink-3);
-  font-size: 14px;
-  pointer-events: none;
-}
-
-.input,
-.select {
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid var(--line);
-  color: var(--ink-0);
-  padding: 9px 12px 9px 32px;
-  border-radius: 10px;
-  font-size: 13px;
-  outline: none;
-  transition: border-color 0.2s ease, background 0.2s ease;
-  width: 220px;
-  font-family: inherit;
-}
-
-.select {
-  padding: 9px 30px 9px 12px;
-  width: 140px;
-  appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%),
-    linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
-  background-position: calc(100% - 18px) 14px, calc(100% - 12px) 14px;
-  background-size: 6px 6px;
-  background-repeat: no-repeat;
-}
-
-.input:focus,
-.select:focus {
-  border-color: var(--gold);
-  background: rgba(212, 175, 106, 0.06);
 }
 
 /* 表格 */
 .table-wrap {
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: #121829;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 16px;
   overflow: hidden;
 }
@@ -614,9 +709,9 @@ onMounted(load);
   padding: 12px 20px;
   font-size: 11px;
   letter-spacing: 3px;
-  color: var(--ink-3);
+  color: #8a93ad;
   text-transform: uppercase;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(255, 255, 255, 0.015);
   min-width: 1080px;
 }
@@ -626,44 +721,27 @@ onMounted(load);
   grid-template-columns: 110px 1.3fr 150px 200px 130px 140px 1.2fr 120px;
   align-items: center;
   padding: 14px 20px;
-  border-bottom: 1px solid var(--line);
-  transition: background 0.2s ease;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background 0.2s;
   animation: fadeUp 0.4s ease both;
   min-width: 1080px;
 }
 
-.row:hover {
-  background: rgba(255, 255, 255, 0.025);
-}
+.row:hover { background: rgba(255, 255, 255, 0.025); }
+.row.row-even { background: rgba(255, 255, 255, 0.012); }
 
-.row.row-even {
-  background: rgba(255, 255, 255, 0.012);
-}
+.col { min-width: 0; }
+.align-right { text-align: right; }
+.subtle { color: #8a93ad; font-size: 13px; }
 
-.row.row-total {
-  background: linear-gradient(90deg, rgba(212, 175, 106, 0.08), rgba(212, 175, 106, 0.01));
-  border-bottom: none;
-  padding-top: 18px;
-  padding-bottom: 18px;
-}
-
-.col {
-  min-width: 0;
-}
-
-.align-right {
-  text-align: right;
-}
-
-.subtle {
-  color: var(--ink-2);
-  font-size: 13px;
-}
-
-/* 汇总条 */
+/* 合计 */
 .summary {
   padding: 16px 20px;
-  background: linear-gradient(90deg, rgba(212, 175, 106, 0.08), rgba(212, 175, 106, 0.01));
+  background: linear-gradient(
+    90deg,
+    rgba(212, 175, 106, 0.08),
+    rgba(212, 175, 106, 0.01)
+  );
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -676,17 +754,13 @@ onMounted(load);
   gap: 14px;
 }
 
-.summary-label {
-  color: var(--ink-2);
-  font-size: 13px;
-  letter-spacing: 1px;
-}
+.summary-label { color: #8a93ad; font-size: 13px; letter-spacing: 1px; }
 
 .summary-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 20px;
   font-weight: 700;
-  color: var(--gold-2);
+  color: #f5d98a;
   letter-spacing: 0.5px;
   text-align: right;
   overflow-wrap: anywhere;
@@ -703,15 +777,14 @@ onMounted(load);
 .summary-bar-fill {
   display: block;
   height: 100%;
-  width: 100%;
   border-radius: 999px;
   background: linear-gradient(90deg, #d4af6a, #f5d98a);
 }
 
 .summary-percent {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 13px;
-  color: var(--ink-1);
+  color: #c8cfe2;
   text-align: right;
 }
 
@@ -729,13 +802,13 @@ onMounted(load);
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--ink-2);
+  color: #8a93ad;
   letter-spacing: 0.5px;
 }
 
 .mini-sum b {
-  color: var(--ink-0);
-  font-family: 'JetBrains Mono', monospace;
+  color: #e9ecf5;
+  font-family: "JetBrains Mono", monospace;
   font-weight: 600;
   margin-left: 2px;
 }
@@ -745,13 +818,11 @@ onMounted(load);
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--ink-3);
+  background: #5b6478;
 }
-
 .mini-sum .dot.cat-deposit { background: #d4af6a; }
 .mini-sum .dot.cat-invest { background: #4fd1a5; }
 .mini-sum .dot.cat-other { background: #7aa6ff; }
-.mini-sum .dot.cat-default { background: var(--ink-3); }
 
 .pill {
   display: inline-block;
@@ -759,46 +830,39 @@ onMounted(load);
   border-radius: 999px;
   font-size: 11px;
   letter-spacing: 2px;
-  border: 1px solid var(--line-strong);
-  color: var(--ink-1);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #c8cfe2;
   background: rgba(255, 255, 255, 0.03);
 }
 
 .pill.cat-deposit { color: #f5d98a; border-color: rgba(212, 175, 106, 0.4); background: rgba(212, 175, 106, 0.1); }
 .pill.cat-invest { color: #8fe7c2; border-color: rgba(79, 209, 165, 0.35); background: rgba(79, 209, 165, 0.08); }
 .pill.cat-other { color: #b3ceff; border-color: rgba(122, 166, 255, 0.35); background: rgba(122, 166, 255, 0.08); }
-.pill.cat-default { color: var(--ink-1); }
 
 .total-pill {
-  color: var(--gold-2);
+  color: #f5d98a;
   border-color: rgba(212, 175, 106, 0.4);
   background: rgba(212, 175, 106, 0.12);
   font-weight: 700;
 }
 
-.name {
-  font-size: 14px;
-  color: var(--ink-0);
-  font-weight: 500;
-}
-
+.name { font-size: 14px; color: #e9ecf5; font-weight: 500; }
 .name-sub {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 11px;
-  color: var(--ink-3);
+  color: #8a93ad;
   margin-top: 2px;
 }
 
 .value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.5px;
 }
-
-.value.pos { color: var(--emerald); }
-.value.neg { color: var(--rose); }
-.value.neutral { color: var(--ink-0); }
+.value.pos { color: #4fd1a5; }
+.value.neg { color: #ff6b7a; }
+.value.neutral { color: #e9ecf5; }
 
 .share-row {
   display: flex;
@@ -828,36 +892,29 @@ onMounted(load);
 .share-fill.neutral { background: linear-gradient(90deg, #8a93ad, #c8cfe2); }
 
 .share-num {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 12px;
   min-width: 60px;
   text-align: right;
 }
-
-.share-num.pos { color: var(--emerald); }
-.share-num.neg { color: var(--rose); }
-.share-num.neutral { color: var(--ink-2); }
+.share-num.pos { color: #4fd1a5; }
+.share-num.neg { color: #ff6b7a; }
+.share-num.neutral { color: #8a93ad; }
 
 .link {
   background: transparent;
   border: none;
-  color: var(--ink-1);
+  color: #c8cfe2;
   cursor: pointer;
   font-size: 13px;
   padding: 4px 8px;
   border-radius: 6px;
-  transition: color 0.2s ease, background 0.2s ease;
+  transition: color 0.2s, background 0.2s;
+  font-family: inherit;
 }
 
-.link:hover {
-  color: var(--gold-2);
-  background: rgba(212, 175, 106, 0.08);
-}
-
-.link.danger:hover {
-  color: var(--rose);
-  background: rgba(255, 107, 122, 0.08);
-}
+.link:hover { color: #f5d98a; background: rgba(212, 175, 106, 0.08); }
+.link.danger:hover { color: #ff6b7a; background: rgba(255, 107, 122, 0.08); }
 
 .empty {
   padding: 60px 20px;
@@ -866,7 +923,7 @@ onMounted(load);
 
 .empty-glyph {
   font-size: 48px;
-  color: var(--ink-3);
+  color: #8a93ad;
   opacity: 0.6;
   animation: pulse 2s ease-in-out infinite;
 }
@@ -878,7 +935,7 @@ onMounted(load);
 
 .empty-text {
   margin-top: 8px;
-  color: var(--ink-2);
+  color: #8a93ad;
   letter-spacing: 2px;
   font-size: 14px;
   margin-bottom: 18px;
@@ -889,16 +946,13 @@ onMounted(load);
   height: 34px;
   margin: 0 auto 12px;
   border-radius: 50%;
-  border: 2px solid var(--line);
-  border-top-color: var(--gold);
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  border-top-color: #d4af6a;
   animation: spin 0.8s linear infinite;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 
-/* 响应式 */
 @media (max-width: 1280px) {
   .hero { grid-template-columns: 1fr 1fr; }
   .hero-main { grid-column: 1 / -1; }
@@ -910,13 +964,9 @@ onMounted(load);
   .row {
     grid-template-columns: 90px 1fr 120px 180px 120px;
   }
-  .col-date,
-  .col-price,
-  .col-note {
-    display: none;
-  }
+  .col-date, .col-price, .col-note { display: none; }
   .input, .select { width: 100%; }
-  .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
-  .toolbar-left { justify-content: flex-start; }
+  .action-bar { flex-direction: column; align-items: stretch; }
+  .action-left, .action-right { justify-content: flex-start; }
 }
 </style>

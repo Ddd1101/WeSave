@@ -232,17 +232,189 @@ router.delete("/:id", (req, res) => {
 });
 
 // ---------- 新增：历史 / 快照 / 趋势 / 变更 ----------
+// 获取已录入过快照的所有日期（降序）
+router.get("/dates", (req, res) => {
+  const rows = db
+    .prepare(
+      "SELECT DISTINCT snapshot_date AS date FROM asset_history WHERE snapshot_date IS NOT NULL ORDER BY date DESC",
+    )
+    .all();
+  res.json({ dates: rows.map((r) => r.date) });
+});
+
+// 获取某天快照（仅从 asset_history 读取，不再 fallback 到主表）
 router.get("/snapshot", (req, res) => {
   const date = parseDate(req.query.date) || todayStr();
-  const assets = snapshotAt(date);
-  // 如果这一天完全没有历史数据，fallback 到当前 assets 表（视为今天的快照）
-  let list = assets;
-  if (list.length === 0 && date === todayStr()) {
-    list = db.prepare("SELECT * FROM assets ORDER BY id ASC").all();
+  const rows = db
+    .prepare(
+      "SELECT * FROM asset_history WHERE snapshot_date = ? AND action = 'snapshot' ORDER BY id ASC",
+    )
+    .all(date);
+  const assets = rows.map((r) => ({
+    id: r.asset_id,
+    category: r.category,
+    name: r.name,
+    value: r.value,
+    purchase_date: r.purchase_date,
+    purchase_price: r.purchase_price,
+    remark: r.remark,
+    change_amount: r.change_amount,
+  }));
+  const total = assets.reduce((s, r) => s + Number(r.value || 0), 0);
+  const byCategory = aggregateByCategory(assets);
+  res.json({ date, assets, total, by_category: byCategory });
+});
+
+// 批量保存某天快照
+router.post("/batch-snapshot", (req, res) => {
+  const date = parseDate(req.query.date);
+  if (!date)
+    return res.status(400).json({ error: "date 参数必须是 YYYY-MM-DD 格式" });
+  const assets = Array.isArray(req.body.assets) ? req.body.assets : [];
+  const isToday = date === todayStr();
+
+  // 校验
+  for (let i = 0; i < assets.length; i++) {
+    const a = assets[i];
+    if (!a || !a.category || !String(a.category).trim()) {
+      return res.status(400).json({ error: `第 ${i + 1} 项：类别不能为空` });
+    }
+    if (!a.name || !String(a.name).trim()) {
+      return res
+        .status(400)
+        .json({ error: `第 ${i + 1} 项：资产名称不能为空` });
+    }
+    const numValue = Number(a.value);
+    if (!Number.isFinite(numValue)) {
+      return res
+        .status(400)
+        .json({ error: `第 ${i + 1} 项：当前价值必须是有效数字` });
+    }
   }
-  const total = list.reduce((s, r) => s + Number(r.value || 0), 0);
-  const byCategory = aggregateByCategory(list);
-  res.json({ date, assets: list, total, by_category: byCategory });
+
+  try {
+    db.exec("BEGIN");
+
+    // 删除该日期的旧快照
+    db.prepare(
+      "DELETE FROM asset_history WHERE snapshot_date = ? AND action = 'snapshot'",
+    ).run(date);
+
+    // 处理每一项资产
+    const results = [];
+    const insertHist = db.prepare(`
+      INSERT INTO asset_history
+        (asset_id, action, snapshot_date, category, name, value, purchase_date, purchase_price, remark, change_amount)
+      VALUES (?, 'snapshot', ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const a of assets) {
+      const category = String(a.category).trim();
+      const name = String(a.name).trim();
+      const value = Number(a.value);
+      const purchaseDate = a.purchase_date || null;
+      const purchasePrice =
+        a.purchase_price !== undefined &&
+        a.purchase_price !== "" &&
+        a.purchase_price !== null
+          ? Number(a.purchase_price)
+          : null;
+      const remark = a.remark || null;
+
+      let assetId = null;
+      if (a.id) {
+        const existing = db
+          .prepare("SELECT id FROM assets WHERE id = ?")
+          .get(Number(a.id));
+        if (existing) {
+          assetId = existing.id;
+          if (isToday) {
+            db.prepare(
+              "UPDATE assets SET category = ?, name = ?, value = ?, purchase_date = ?, purchase_price = ?, remark = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            ).run(
+              category,
+              name,
+              value,
+              purchaseDate,
+              purchasePrice,
+              remark,
+              assetId,
+            );
+          }
+        }
+      }
+
+      if (!assetId) {
+        // 新资产（或主表中不存在的）：若为今天则插入主表，历史快照也要有 asset_id
+        if (isToday) {
+          const info = db
+            .prepare(
+              "INSERT INTO assets (category, name, value, purchase_date, purchase_price, remark) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .run(category, name, value, purchaseDate, purchasePrice, remark);
+          assetId = info.lastInsertRowid;
+        } else {
+          // 历史日期：插入一个占位主表记录，保证 asset_id 存在（便于日后关联）
+          const info = db
+            .prepare(
+              "INSERT INTO assets (category, name, value, purchase_date, purchase_price, remark) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .run(category, name, value, purchaseDate, purchasePrice, remark);
+          assetId = info.lastInsertRowid;
+        }
+      }
+
+      // 计算 change_amount：相对上一个日期（snapshot_date < date）该资产最后一次快照值
+      const prevRecord = db
+        .prepare(
+          `
+        SELECT value FROM asset_history
+        WHERE asset_id = ? AND snapshot_date < ? AND action = 'snapshot'
+        ORDER BY snapshot_date DESC, recorded_at DESC LIMIT 1
+      `,
+        )
+        .get(assetId, date);
+      const changeAmount = prevRecord ? value - Number(prevRecord.value) : null;
+
+      // 插入历史记录
+      insertHist.run(
+        assetId,
+        date,
+        category,
+        name,
+        value,
+        purchaseDate,
+        purchasePrice,
+        remark,
+        changeAmount,
+      );
+
+      results.push({
+        id: assetId,
+        category,
+        name,
+        value,
+        purchase_date: purchaseDate,
+        purchase_price: purchasePrice,
+        remark,
+        change_amount: changeAmount,
+      });
+    }
+
+    db.exec("COMMIT");
+
+    const total = results.reduce((s, r) => s + Number(r.value || 0), 0);
+    const byCategory = aggregateByCategory(results);
+    res.json({ date, assets: results, total, by_category: byCategory });
+  } catch (err) {
+    try {
+      db.exec("ROLLBACK");
+    } catch (_) {}
+    console.error("[batch-snapshot] 事务回滚：", err);
+    res.status(500).json({
+      error: err && err.message ? err.message : "保存失败",
+    });
+  }
 });
 
 router.get("/snapshots", (req, res) => {
