@@ -455,20 +455,21 @@ watch(
 }
 
 .field-input {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: #e9ecf5;
   padding: 9px 12px;
   border-radius: 10px;
   font-size: 14px;
   outline: none;
-  transition: border-color 0.2s, background 0.2s;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
   font-family: inherit;
 }
 
 .field-input:focus {
-  border-color: #d4af6a;
+  border-color: rgba(212, 175, 106, 0.55);
   background: rgba(212, 175, 106, 0.08);
+  box-shadow: 0 0 0 3px rgba(212, 175, 106, 0.12);
 }
 
 .field-input.money {
@@ -509,21 +510,23 @@ watch(
 }
 
 .assets-table {
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   max-height: 60vh;
   min-height: 260px;
+  background: rgba(0, 0, 0, 0.15);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .table-header {
   display: grid;
   grid-template-columns: 48px 130px 1.3fr 140px 130px 170px 1fr 80px;
   align-items: center;
-  padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.025);
+  padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015));
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   font-size: 11px;
   letter-spacing: 2px;
@@ -537,38 +540,47 @@ watch(
   overflow-x: hidden;
   flex: 1 1 auto;
   scrollbar-width: thin;
-  scrollbar-color: rgba(212, 175, 106, 0.35) transparent;
+  scrollbar-color: rgba(212, 175, 106, 0.4) rgba(255, 255, 255, 0.03);
 }
 
 .table-body::-webkit-scrollbar {
-  width: 8px;
+  width: 10px;
 }
 .table-body::-webkit-scrollbar-thumb {
-  background: rgba(212, 175, 106, 0.3);
-  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(212, 175, 106, 0.3), rgba(212, 175, 106, 0.45));
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 .table-body::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 175, 106, 0.5);
+  background: linear-gradient(180deg, rgba(212, 175, 106, 0.5), rgba(212, 175, 106, 0.7));
+  background-clip: padding-box;
+  border: 2px solid transparent;
 }
 .table-body::-webkit-scrollbar-track {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 5px;
 }
 
 .table-row {
   display: grid;
   grid-template-columns: 48px 130px 1.3fr 140px 130px 170px 1fr 80px;
   align-items: center;
-  padding: 10px 14px;
+  padding: 12px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   gap: 8px;
+  transition: background 0.15s ease;
+}
+.table-row:hover {
+  background: rgba(212, 175, 106, 0.04);
 }
 
 .table-footer-row {
-  padding: 10px 14px;
+  padding: 12px 14px;
 }
 
 .table-row.row-error {
-  background: rgba(255, 107, 122, 0.05);
+  background: rgba(255, 107, 122, 0.07);
 }
 
 .col {
@@ -578,15 +590,18 @@ watch(
 }
 
 .col-index {
-  color: #8a93ad;
+  color: #d4af6a;
   font-family: "JetBrains Mono", monospace;
   font-size: 13px;
   text-align: center;
+  font-weight: 600;
 }
 
 .err-text {
-  color: #ff6b7a;
+  color: #ff858f;
   font-size: 11px;
+  letter-spacing: 0.3px;
+  padding-left: 2px;
 }
 
 .add-row {

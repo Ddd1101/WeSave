@@ -21,8 +21,9 @@ const snapshot = ref({ assets: [], total: 0, by_category: [] });
 const loading = ref(false);
 const keyword = ref("");
 const categoryFilter = ref("");
+const sortKey = ref("value_desc"); // value_desc | value_asc | name | cat | date | price
 
-// 单项编辑/删除（兼容旧行为）
+// 单项编辑/删除
 const formVisible = ref(false);
 const editingItem = ref(null);
 
@@ -59,7 +60,6 @@ async function loadSnapshot() {
 async function initialLoad() {
   await loadDates();
   if (snapshotDates.value.length === 0) {
-    // 完全没有历史数据：展示空态
     snapshot.value = { assets: [], total: 0, by_category: [] };
     return;
   }
@@ -76,11 +76,15 @@ function editSelectedDate() {
 }
 
 function onBatchSaved(res) {
-  // 保存后刷新日期列表 & 当前快照
   if (res && res.date) {
     selectedDate.value = res.date;
   }
   loadDates().then(loadSnapshot);
+}
+
+function handleAddNew() {
+  editingItem.value = null;
+  formVisible.value = true;
 }
 
 const categories = computed(() => {
@@ -92,7 +96,7 @@ const categories = computed(() => {
 const filteredRows = computed(() => {
   const kw = keyword.value.trim().toLowerCase();
   const cat = categoryFilter.value;
-  return snapshot.value.assets.filter((row) => {
+  let rows = snapshot.value.assets.filter((row) => {
     if (cat && row.category !== cat) return false;
     if (!kw) return true;
     return (
@@ -101,6 +105,17 @@ const filteredRows = computed(() => {
       (row.category || "").toLowerCase().includes(kw)
     );
   });
+
+  // 排序
+  const key = sortKey.value;
+  const copy = [...rows];
+  if (key === "value_desc") copy.sort((a, b) => Number(b.value || 0) - Number(a.value || 0));
+  else if (key === "value_asc") copy.sort((a, b) => Number(a.value || 0) - Number(b.value || 0));
+  else if (key === "name") copy.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "zh-CN"));
+  else if (key === "cat") copy.sort((a, b) => String(a.category || "").localeCompare(String(b.category || ""), "zh-CN"));
+  else if (key === "date") copy.sort((a, b) => String(b.purchase_date || "").localeCompare(String(a.purchase_date || "")));
+  else if (key === "price") copy.sort((a, b) => Number(b.purchase_price || 0) - Number(a.purchase_price || 0));
+  return copy;
 });
 
 const groupSummary = computed(() => {
@@ -127,14 +142,6 @@ const percentOf = (row) => {
   if (base === 0) return 0;
   return (Number(row.value || 0) / base) * 100;
 };
-
-const heroChips = computed(() => {
-  const out = [];
-  snapshot.value.by_category.forEach((c) => {
-    out.push(c);
-  });
-  return out;
-});
 
 function valueTone(row) {
   const v = Number(row.value);
@@ -168,9 +175,13 @@ function handleEdit(row) {
 async function handleDelete(row) {
   try {
     await ElMessageBox.confirm(
-      `确认删除 "${row.name}" 吗？将从资产主表中移除；当前日期的快照将在下次录入时更新。`,
+      `确认删除「${row.name}」吗？该资产将从数据库移除，当前日期的快照会在下次录入时更新。`,
       "删除确认",
-      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }
+      {
+        type: "warning",
+        confirmButtonText: "删除",
+        cancelButtonText: "取消",
+      }
     );
     await deleteAsset(row.id);
     ElMessage.success("已删除");
@@ -194,14 +205,20 @@ onMounted(initialLoad);
 
 <template>
   <div class="page">
-    <!-- 操作入口 -->
+    <!-- 顶部操作栏 -->
     <section class="action-bar">
       <div class="action-left">
-        <button class="btn primary" @click="openBatchForm()">
-          <span class="plus">＋</span> 录入 / 编辑 今日资产（批量）
+        <button class="btn primary" @click="openBatchForm">
+          <span class="btn-icon">＋</span>
+          <span>录入 / 编辑 · 批量</span>
         </button>
+        <button class="btn ghost" @click="handleAddNew">
+          <span class="btn-icon">✎</span>
+          <span>新增单项</span>
+        </button>
+
         <div class="date-selector">
-          <label class="label">按日期查看</label>
+          <span class="field-label">按日期查看</span>
           <select v-model="selectedDate" class="select" :disabled="loading">
             <option v-for="d in snapshotDates" :key="d" :value="d">
               {{ formatDate(d) }}
@@ -212,6 +229,7 @@ onMounted(initialLoad);
           </button>
         </div>
       </div>
+
       <div class="action-right">
         <div class="input-group">
           <span class="input-icon">⌕</span>
@@ -225,11 +243,19 @@ onMounted(initialLoad);
           <option value="">全部类别</option>
           <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
         </select>
+        <select v-model="sortKey" class="select small">
+          <option value="value_desc">价值 高→低</option>
+          <option value="value_asc">价值 低→高</option>
+          <option value="name">名称</option>
+          <option value="cat">类别</option>
+          <option value="date">购买日期</option>
+          <option value="price">购买价格</option>
+        </select>
         <button class="btn ghost" @click="loadSnapshot">刷新</button>
       </div>
     </section>
 
-    <!-- 总资产卡片 -->
+    <!-- Hero 汇总卡 -->
     <section class="hero">
       <div class="hero-card hero-main">
         <div class="hero-sub">NET WORTH · 净资产总额</div>
@@ -238,16 +264,25 @@ onMounted(initialLoad);
           <span class="number">{{ formatCurrency(snapshot.total).replace("¥", "") }}</span>
         </div>
         <div class="hero-foot">
-          <span>{{ snapshot.assets.length }} 项记录</span>
-          <span class="dot" />
-          <span>{{ snapshot.by_category.length }} 个分类</span>
-          <span class="dot" />
-          <span class="date-label">{{ formatDate(selectedDate) }}</span>
+          <div class="hero-foot-item">
+            <span class="hero-foot-label">资产项</span>
+            <span class="hero-foot-value">{{ snapshot.assets.length }}</span>
+          </div>
+          <span class="sep" />
+          <div class="hero-foot-item">
+            <span class="hero-foot-label">分类</span>
+            <span class="hero-foot-value">{{ snapshot.by_category.length }}</span>
+          </div>
+          <span class="sep" />
+          <div class="hero-foot-item">
+            <span class="hero-foot-label">快照日期</span>
+            <span class="hero-foot-value gold">{{ formatDate(selectedDate) }}</span>
+          </div>
         </div>
       </div>
 
       <div
-        v-for="(chip, i) in heroChips"
+        v-for="(chip, i) in snapshot.by_category"
         :key="chip.category"
         class="hero-card hero-chip"
         :class="categoryClass(chip.category)"
@@ -255,20 +290,18 @@ onMounted(initialLoad);
       >
         <div class="chip-top">
           <span class="chip-name">{{ chip.category }}</span>
+          <span class="chip-pill">{{ formatPercent((chip.sum / (Math.abs(snapshot.total) || 1)) * 100, 1) }}</span>
         </div>
         <div class="chip-value">{{ formatCurrency(chip.sum) }}</div>
         <div class="chip-bar">
           <span
             class="chip-bar-fill"
-            :style="{
-              width:
-                Math.max(4, (Math.abs(chip.sum) / (Math.abs(snapshot.total) || 1)) * 100) +
-                '%',
-            }"
+            :class="categoryClass(chip.category)"
+            :style="{ width: Math.max(4, (Math.abs(chip.sum) / (Math.abs(snapshot.total) || 1)) * 100) + '%' }"
           />
         </div>
-        <div class="chip-percent">
-          占比 {{ formatPercent((chip.sum / (Math.abs(snapshot.total) || 1)) * 100) }}
+        <div class="chip-foot">
+          <span>{{ formatPercent((chip.sum / (Math.abs(snapshot.total) || 1)) * 100) }} 占比</span>
         </div>
       </div>
     </section>
@@ -294,13 +327,17 @@ onMounted(initialLoad);
 
         <div v-else-if="snapshot.assets.length === 0" class="empty">
           <div class="empty-glyph">◇</div>
-          <div class="empty-text">暂无资产快照 · 请点击上方「批量录入」</div>
-          <button class="btn primary small" @click="openBatchForm">录入今日资产</button>
+          <div class="empty-title">暂无资产快照</div>
+          <div class="empty-text">点击下方按钮，开始录入您的第一份资产快照</div>
+          <button class="btn primary" @click="openBatchForm">
+            <span class="btn-icon">＋</span>
+            <span>录入今日资产</span>
+          </button>
         </div>
 
         <div v-else-if="filteredRows.length === 0" class="empty">
-          <div class="empty-glyph">◇</div>
-          <div class="empty-text">没有匹配的记录</div>
+          <div class="empty-glyph">◎</div>
+          <div class="empty-text">没有匹配的记录，请尝试调整搜索条件</div>
         </div>
 
         <template v-else>
@@ -309,7 +346,7 @@ onMounted(initialLoad);
             :key="row.id || row.name + idx"
             class="row"
             :class="{ 'row-even': idx % 2 === 1 }"
-            :style="{ animationDelay: (idx * 25) + 'ms' }"
+            :style="{ animationDelay: (idx * 22) + 'ms' }"
           >
             <div class="col col-cat">
               <span class="pill" :class="categoryClass(row.category)">
@@ -318,10 +355,10 @@ onMounted(initialLoad);
             </div>
             <div class="col col-name">
               <div class="name">{{ row.name }}</div>
-              <div v-if="row.change_amount != null" class="name-sub">
-                变动 {{ row.change_amount >= 0 ? "+" : "" }}
-                {{ formatCurrency(row.change_amount).replace("¥", "¥") }}
+              <div v-if="row.change_amount != null" class="name-sub" :class="row.change_amount >= 0 ? 'pos' : 'neg'">
+                变动 {{ row.change_amount >= 0 ? '+' : '' }}{{ formatCurrency(row.change_amount).replace('¥', '¥') }}
               </div>
+              <div v-else-if="row.remark && row.remark.length < 20" class="name-sub subtle">{{ row.remark }}</div>
             </div>
             <div class="col col-value align-right">
               <div class="value" :class="valueTone(row)">
@@ -342,11 +379,15 @@ onMounted(initialLoad);
                 </span>
               </div>
             </div>
-            <div class="col col-date subtle">{{ formatDate(row.purchase_date) }}</div>
+            <div class="col col-date subtle">
+              <span class="date-chip">{{ formatDate(row.purchase_date) }}</span>
+            </div>
             <div class="col col-price align-right subtle">
               {{ row.purchase_price != null && row.purchase_price !== "" ? formatCurrency(row.purchase_price) : "—" }}
             </div>
-            <div class="col col-note subtle">{{ row.remark || "—" }}</div>
+            <div class="col col-note subtle">
+              <span class="ellipsis">{{ row.remark || "—" }}</span>
+            </div>
             <div class="col col-action align-right">
               <button class="link" @click="handleEdit(row)">编辑</button>
               <button class="link danger" @click="handleDelete(row)">删除</button>
@@ -359,10 +400,10 @@ onMounted(initialLoad);
         <div class="summary-main">
           <span class="pill total-pill">合计</span>
           <span class="summary-label">{{ filteredRows.length }} 项资产</span>
-          <span class="summary-value">{{ formatCurrency(total) }}</span>
           <span class="summary-bar">
             <span class="summary-bar-fill" />
           </span>
+          <span class="summary-value">{{ formatCurrency(total) }}</span>
           <span class="summary-percent">100.00%</span>
         </div>
         <div class="summary-breakdown">
@@ -396,16 +437,17 @@ onMounted(initialLoad);
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* 操作栏 */
+/* Action Bar */
 .action-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 18px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 14px;
+  padding: 16px 20px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-1);
   flex-wrap: wrap;
 }
 
@@ -417,10 +459,10 @@ onMounted(initialLoad);
   flex-wrap: wrap;
 }
 
-.label {
-  font-size: 12px;
+.field-label {
+  font-size: 11px;
   letter-spacing: 2px;
-  color: #8a93ad;
+  color: var(--ink-2);
   text-transform: uppercase;
 }
 
@@ -428,21 +470,24 @@ onMounted(initialLoad);
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  padding-left: 14px;
+  margin-left: 6px;
+  border-left: 1px solid var(--line);
 }
 
 .btn {
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--line-strong);
   background: rgba(255, 255, 255, 0.02);
-  color: #c8cfe2;
-  padding: 9px 16px;
-  border-radius: 10px;
+  color: var(--ink-1);
+  padding: 10px 16px;
+  border-radius: 11px;
   font-size: 13px;
   letter-spacing: 1px;
   cursor: pointer;
-  transition: transform 0.2s, background 0.2s, border-color 0.2s;
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   white-space: nowrap;
   font-family: inherit;
 }
@@ -450,6 +495,7 @@ onMounted(initialLoad);
 .btn:hover:not(:disabled) {
   transform: translateY(-1px);
   background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(212, 175, 106, 0.3);
 }
 
 .btn:disabled {
@@ -457,24 +503,27 @@ onMounted(initialLoad);
   cursor: not-allowed;
 }
 
+.btn-icon {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--gold);
+  font-size: 14px;
+}
+
 .btn.primary {
   background: linear-gradient(135deg, #d4af6a, #b98644);
   color: #1a1206;
   border: 1px solid rgba(255, 255, 255, 0.25);
   font-weight: 600;
-  box-shadow: 0 10px 24px -12px rgba(212, 175, 106, 0.55);
+  box-shadow: var(--shadow-gold);
 }
+.btn.primary .btn-icon { color: #1a1206; }
 
 .btn.ghost { background: transparent; }
 
 .btn.small {
-  padding: 7px 12px;
+  padding: 8px 12px;
   font-size: 12px;
-}
-
-.plus {
-  font-family: "JetBrains Mono", monospace;
-  font-weight: 700;
 }
 
 .input-group {
@@ -486,7 +535,7 @@ onMounted(initialLoad);
 .input-icon {
   position: absolute;
   left: 12px;
-  color: #8a93ad;
+  color: var(--ink-2);
   font-size: 14px;
   pointer-events: none;
 }
@@ -494,36 +543,38 @@ onMounted(initialLoad);
 .input,
 .select {
   background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #e9ecf5;
-  padding: 9px 12px 9px 32px;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  color: var(--ink-0);
+  padding: 10px 14px 10px 34px;
+  border-radius: 11px;
   font-size: 13px;
   outline: none;
-  transition: border-color 0.2s, background 0.2s;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
   font-family: inherit;
-  min-width: 160px;
+  min-width: 180px;
 }
 
 .select {
-  padding: 9px 30px 9px 12px;
-  min-width: 120px;
+  padding: 10px 30px 10px 12px;
+  min-width: 130px;
   appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, #8a93ad 50%),
-    linear-gradient(135deg, #8a93ad 50%, transparent 50%);
-  background-position: calc(100% - 18px) 14px, calc(100% - 12px) 14px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%),
+    linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 15px, calc(100% - 12px) 15px;
   background-size: 6px 6px;
   background-repeat: no-repeat;
   background-color: rgba(0, 0, 0, 0.25);
 }
+.select.small { min-width: 110px; }
 
 .input:focus,
 .select:focus {
-  border-color: #d4af6a;
-  background: rgba(212, 175, 106, 0.06);
+  border-color: var(--gold);
+  background: var(--gold-soft);
+  box-shadow: 0 0 0 3px rgba(212, 175, 106, 0.15);
 }
 
-/* Hero 卡片 */
+/* Hero */
 .hero {
   display: grid;
   grid-template-columns: 1.6fr repeat(3, 1fr);
@@ -532,14 +583,15 @@ onMounted(initialLoad);
 
 .hero-card {
   position: relative;
-  padding: 20px 22px;
-  border-radius: 16px;
-  background: #121829;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 22px 24px;
+  border-radius: 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
   overflow: hidden;
-  transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
+  transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
   animation: fadeUp 0.55s ease both;
   min-width: 0;
+  box-shadow: var(--shadow-1);
 }
 
 .hero-card:hover {
@@ -562,37 +614,43 @@ onMounted(initialLoad);
 .hero-main::before {
   content: "";
   position: absolute;
-  right: -40px;
-  top: -40px;
-  width: 180px;
-  height: 180px;
+  right: -60px;
+  top: -60px;
+  width: 220px;
+  height: 220px;
   background: radial-gradient(closest-side, rgba(245, 217, 138, 0.35), transparent);
   filter: blur(10px);
+  animation: heroGlow 4s ease-in-out infinite alternate;
+}
+@keyframes heroGlow {
+  from { opacity: 0.6; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1.05); }
 }
 
 .hero-sub {
   font-size: 11px;
   letter-spacing: 4px;
-  color: #8a93ad;
+  color: var(--ink-2);
   text-transform: uppercase;
 }
 
 .hero-amount {
-  margin-top: 10px;
+  margin-top: 12px;
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 10px;
 }
 
 .hero-amount .currency {
-  font-size: 20px;
-  color: #f5d98a;
+  font-size: 22px;
+  color: var(--gold-2);
   font-family: "Noto Serif SC", serif;
+  font-weight: 700;
 }
 
 .hero-amount .number {
   font-family: "JetBrains Mono", monospace;
-  font-size: 34px;
+  font-size: 38px;
   font-weight: 700;
   letter-spacing: 1px;
   color: #fff;
@@ -601,31 +659,47 @@ onMounted(initialLoad);
 }
 
 .hero-foot {
-  margin-top: 12px;
+  margin-top: 18px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  color: #8a93ad;
+  gap: 16px;
+  color: var(--ink-2);
   font-size: 12px;
   flex-wrap: wrap;
+  padding-top: 14px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
 }
 
-.hero-foot .dot {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: #5b6478;
+.hero-foot-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
+.hero-foot-label {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--ink-3);
+  text-transform: uppercase;
+}
+.hero-foot-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  color: var(--ink-0);
+  font-weight: 600;
+}
+.hero-foot-value.gold { color: var(--gold-2); }
 
-.date-label {
-  color: #f5d98a;
-  font-family: "JetBrains Mono", monospace;
+.sep {
+  width: 1px;
+  height: 22px;
+  background: var(--line);
 }
 
 .chip-top {
   display: flex;
   justify-content: space-between;
-  color: #8a93ad;
+  align-items: center;
+  color: var(--ink-2);
   font-size: 12px;
   letter-spacing: 2px;
   text-transform: uppercase;
@@ -636,24 +710,40 @@ onMounted(initialLoad);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 600;
+  letter-spacing: 3px;
+  color: var(--ink-1);
+  text-transform: none;
+  font-size: 14px;
+}
+
+.chip-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--gold);
+  background: rgba(212, 175, 106, 0.1);
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid rgba(212, 175, 106, 0.2);
 }
 
 .chip-value {
-  margin-top: 10px;
+  margin-top: 12px;
   font-family: "JetBrains Mono", monospace;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: 0.5px;
   overflow-wrap: anywhere;
   word-break: break-all;
-  color: #e9ecf5;
+  color: var(--ink-0);
 }
 
 .chip-bar {
-  margin-top: 12px;
+  margin-top: 14px;
   height: 6px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
   overflow: hidden;
 }
 
@@ -661,27 +751,27 @@ onMounted(initialLoad);
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #d4af6a, #f5d98a);
+  background: linear-gradient(90deg, var(--gold), var(--gold-2));
   transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
 }
+.chip-bar-fill.cat-invest { background: linear-gradient(90deg, var(--emerald), #7ee8c2); }
+.chip-bar-fill.cat-other { background: linear-gradient(90deg, #7aa6ff, #b3ceff); }
+.chip-bar-fill.cat-deposit { background: linear-gradient(90deg, var(--gold), var(--gold-2)); }
 
-.hero-chip.cat-invest .chip-bar-fill { background: linear-gradient(90deg, #4fd1a5, #7ee8c2); }
-.hero-chip.cat-other .chip-bar-fill { background: linear-gradient(90deg, #7aa6ff, #b3ceff); }
-.hero-chip.cat-deposit .chip-bar-fill { background: linear-gradient(90deg, #d4af6a, #f5d98a); }
-
-.chip-percent {
-  margin-top: 8px;
-  font-size: 12px;
-  color: #8a93ad;
+.chip-foot {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--ink-2);
   letter-spacing: 1px;
 }
 
-/* 表格 */
+/* Table */
 .table-wrap {
-  background: #121829;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
   overflow: hidden;
+  box-shadow: var(--shadow-1);
 }
 
 .table-scroll {
@@ -699,68 +789,83 @@ onMounted(initialLoad);
 }
 
 .table-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(212, 175, 106, 0.3);
 }
 
 .table-header {
   display: grid;
-  grid-template-columns: 110px 1.3fr 150px 200px 130px 140px 1.2fr 120px;
+  grid-template-columns: 110px 1.3fr 150px 220px 130px 140px 1.2fr 120px;
   align-items: center;
-  padding: 12px 20px;
+  padding: 14px 22px;
   font-size: 11px;
   letter-spacing: 3px;
-  color: #8a93ad;
+  color: var(--ink-2);
   text-transform: uppercase;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.015);
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
   min-width: 1080px;
 }
 
 .row {
   display: grid;
-  grid-template-columns: 110px 1.3fr 150px 200px 130px 140px 1.2fr 120px;
+  grid-template-columns: 110px 1.3fr 150px 220px 130px 140px 1.2fr 120px;
   align-items: center;
-  padding: 14px 20px;
+  padding: 16px 22px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  transition: background 0.2s;
+  transition: background 0.2s ease;
   animation: fadeUp 0.4s ease both;
   min-width: 1080px;
 }
 
-.row:hover { background: rgba(255, 255, 255, 0.025); }
+.row:hover { background: rgba(212, 175, 106, 0.04); }
 .row.row-even { background: rgba(255, 255, 255, 0.012); }
+.row.row-even:hover { background: rgba(212, 175, 106, 0.05); }
 
 .col { min-width: 0; }
 .align-right { text-align: right; }
-.subtle { color: #8a93ad; font-size: 13px; }
+.subtle { color: var(--ink-2); font-size: 13px; }
+
+.date-chip {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+.ellipsis {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 /* 合计 */
 .summary {
-  padding: 16px 20px;
-  background: linear-gradient(
-    90deg,
-    rgba(212, 175, 106, 0.08),
-    rgba(212, 175, 106, 0.01)
-  );
+  padding: 18px 22px;
+  background: linear-gradient(90deg, rgba(212, 175, 106, 0.08), rgba(212, 175, 106, 0.01));
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  border-top: 1px solid var(--line);
 }
 
 .summary-main {
   display: grid;
-  grid-template-columns: auto auto 1fr 220px 80px;
+  grid-template-columns: auto auto 1fr auto auto;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
 }
 
-.summary-label { color: #8a93ad; font-size: 13px; letter-spacing: 1px; }
+.summary-label { color: var(--ink-2); font-size: 13px; letter-spacing: 1px; }
 
 .summary-value {
   font-family: "JetBrains Mono", monospace;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  color: #f5d98a;
+  color: var(--gold-2);
   letter-spacing: 0.5px;
   text-align: right;
   overflow-wrap: anywhere;
@@ -770,7 +875,7 @@ onMounted(initialLoad);
   display: block;
   height: 6px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
   overflow: hidden;
 }
 
@@ -778,36 +883,37 @@ onMounted(initialLoad);
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #d4af6a, #f5d98a);
+  background: linear-gradient(90deg, var(--gold), var(--gold-2));
+  width: 100%;
 }
 
 .summary-percent {
   font-family: "JetBrains Mono", monospace;
   font-size: 13px;
-  color: #c8cfe2;
+  color: var(--ink-1);
   text-align: right;
 }
 
 .summary-breakdown {
   display: flex;
   flex-wrap: wrap;
-  gap: 18px;
+  gap: 16px;
   padding-top: 4px;
-  border-top: 1px dashed rgba(255, 255, 255, 0.08);
-  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+  padding-top: 12px;
 }
 
 .mini-sum {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
-  color: #8a93ad;
+  color: var(--ink-2);
   letter-spacing: 0.5px;
 }
 
 .mini-sum b {
-  color: #e9ecf5;
+  color: var(--ink-0);
   font-family: "JetBrains Mono", monospace;
   font-weight: 600;
   margin-left: 2px;
@@ -818,65 +924,69 @@ onMounted(initialLoad);
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #5b6478;
+  background: var(--ink-3);
 }
-.mini-sum .dot.cat-deposit { background: #d4af6a; }
-.mini-sum .dot.cat-invest { background: #4fd1a5; }
+.mini-sum .dot.cat-deposit { background: var(--gold); }
+.mini-sum .dot.cat-invest { background: var(--emerald); }
 .mini-sum .dot.cat-other { background: #7aa6ff; }
 
 .pill {
   display: inline-block;
-  padding: 4px 10px;
+  padding: 5px 11px;
   border-radius: 999px;
   font-size: 11px;
   letter-spacing: 2px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #c8cfe2;
+  color: var(--ink-1);
   background: rgba(255, 255, 255, 0.03);
+  font-weight: 500;
 }
 
-.pill.cat-deposit { color: #f5d98a; border-color: rgba(212, 175, 106, 0.4); background: rgba(212, 175, 106, 0.1); }
-.pill.cat-invest { color: #8fe7c2; border-color: rgba(79, 209, 165, 0.35); background: rgba(79, 209, 165, 0.08); }
-.pill.cat-other { color: #b3ceff; border-color: rgba(122, 166, 255, 0.35); background: rgba(122, 166, 255, 0.08); }
+.pill.cat-deposit { color: var(--gold-2); border-color: rgba(212, 175, 106, 0.4); background: rgba(212, 175, 106, 0.12); }
+.pill.cat-invest { color: #8fe7c2; border-color: rgba(79, 209, 165, 0.35); background: rgba(79, 209, 165, 0.1); }
+.pill.cat-other { color: #b3ceff; border-color: rgba(122, 166, 255, 0.35); background: rgba(122, 166, 255, 0.1); }
 
 .total-pill {
-  color: #f5d98a;
-  border-color: rgba(212, 175, 106, 0.4);
-  background: rgba(212, 175, 106, 0.12);
+  color: var(--gold-2);
+  border-color: rgba(212, 175, 106, 0.45);
+  background: rgba(212, 175, 106, 0.15);
   font-weight: 700;
 }
 
-.name { font-size: 14px; color: #e9ecf5; font-weight: 500; }
+.name { font-size: 14px; color: var(--ink-0); font-weight: 500; }
 .name-sub {
   font-family: "JetBrains Mono", monospace;
   font-size: 11px;
-  color: #8a93ad;
-  margin-top: 2px;
+  color: var(--ink-2);
+  margin-top: 3px;
+  letter-spacing: 0.5px;
 }
+.name-sub.pos { color: var(--emerald); }
+.name-sub.neg { color: var(--rose); }
 
 .value {
   font-family: "JetBrains Mono", monospace;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.5px;
 }
-.value.pos { color: #4fd1a5; }
-.value.neg { color: #ff6b7a; }
-.value.neutral { color: #e9ecf5; }
+.value.pos { color: var(--emerald); }
+.value.neg { color: var(--rose); }
+.value.neutral { color: var(--ink-0); }
 
 .share-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   justify-content: flex-end;
 }
 
 .share-bar {
   position: relative;
-  width: 140px;
+  width: 160px;
   height: 6px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
   overflow: hidden;
 }
 
@@ -887,9 +997,9 @@ onMounted(initialLoad);
   transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.share-fill.pos { background: linear-gradient(90deg, #4fd1a5, #b6f0d8); }
-.share-fill.neg { background: linear-gradient(90deg, #ff6b7a, #ffb1b9); }
-.share-fill.neutral { background: linear-gradient(90deg, #8a93ad, #c8cfe2); }
+.share-fill.pos { background: linear-gradient(90deg, var(--emerald), #b6f0d8); }
+.share-fill.neg { background: linear-gradient(90deg, var(--rose), #ffb1b9); }
+.share-fill.neutral { background: linear-gradient(90deg, var(--ink-2), var(--ink-1)); }
 
 .share-num {
   font-family: "JetBrains Mono", monospace;
@@ -897,57 +1007,73 @@ onMounted(initialLoad);
   min-width: 60px;
   text-align: right;
 }
-.share-num.pos { color: #4fd1a5; }
-.share-num.neg { color: #ff6b7a; }
-.share-num.neutral { color: #8a93ad; }
+.share-num.pos { color: var(--emerald); }
+.share-num.neg { color: var(--rose); }
+.share-num.neutral { color: var(--ink-2); }
 
 .link {
   background: transparent;
-  border: none;
-  color: #c8cfe2;
+  border: 1px solid transparent;
+  color: var(--ink-1);
   cursor: pointer;
-  font-size: 13px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  transition: color 0.2s, background 0.2s;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
   font-family: inherit;
+  margin-left: 4px;
 }
 
-.link:hover { color: #f5d98a; background: rgba(212, 175, 106, 0.08); }
-.link.danger:hover { color: #ff6b7a; background: rgba(255, 107, 122, 0.08); }
+.link:hover {
+  color: var(--gold-2);
+  background: rgba(212, 175, 106, 0.12);
+  border-color: rgba(212, 175, 106, 0.3);
+}
+.link.danger:hover { color: var(--rose); background: rgba(255, 107, 122, 0.1); border-color: rgba(255, 107, 122, 0.3); }
 
 .empty {
-  padding: 60px 20px;
+  padding: 68px 20px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
 }
 
 .empty-glyph {
-  font-size: 48px;
-  color: #8a93ad;
-  opacity: 0.6;
-  animation: pulse 2s ease-in-out infinite;
+  font-size: 56px;
+  color: var(--ink-2);
+  opacity: 0.5;
+  animation: pulse 2.2s ease-in-out infinite;
+  line-height: 1;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.96); }
+  50% { opacity: 0.7; transform: scale(1.04); }
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.8; }
+.empty-title {
+  font-size: 17px;
+  color: var(--ink-0);
+  font-weight: 600;
+  letter-spacing: 2px;
 }
 
 .empty-text {
-  margin-top: 8px;
-  color: #8a93ad;
-  letter-spacing: 2px;
-  font-size: 14px;
-  margin-bottom: 18px;
+  color: var(--ink-2);
+  letter-spacing: 1px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  max-width: 420px;
 }
 
 .spinner {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   margin: 0 auto 12px;
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.08);
-  border-top-color: #d4af6a;
+  border-top-color: var(--gold);
   animation: spin 0.8s linear infinite;
 }
 
@@ -956,16 +1082,14 @@ onMounted(initialLoad);
 @media (max-width: 1280px) {
   .hero { grid-template-columns: 1fr 1fr; }
   .hero-main { grid-column: 1 / -1; }
+  .hero-amount .number { font-size: 32px; }
 }
 
 @media (max-width: 820px) {
   .hero { grid-template-columns: 1fr; }
-  .table-header,
-  .row {
-    grid-template-columns: 90px 1fr 120px 180px 120px;
-  }
+  .table-header, .row { grid-template-columns: 90px 1fr 120px 180px 120px; }
   .col-date, .col-price, .col-note { display: none; }
-  .input, .select { width: 100%; }
+  .input, .select { width: 100%; min-width: 0; }
   .action-bar { flex-direction: column; align-items: stretch; }
   .action-left, .action-right { justify-content: flex-start; }
 }
