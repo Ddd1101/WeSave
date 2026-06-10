@@ -37,12 +37,20 @@ async function loadDates() {
     const list = (data && data.dates) || [];
     snapshotDates.value = list;
     if (list.length > 0 && !list.includes(selectedDate.value)) {
-      selectedDate.value = list[0];
+      // 首次加载时如果默认日期无快照，回退到最新的快照日期
+      if (selectedDate.value === todayStr()) {
+        selectedDate.value = list[0];
+      }
     }
   } catch (e) {
     snapshotDates.value = [];
   }
 }
+
+const recentSnapshotDates = computed(() => {
+  // 展示最近 5 个快照日期作为快捷按钮
+  return (snapshotDates.value || []).slice(0, 5);
+});
 
 async function loadSnapshot() {
   loading.value = true;
@@ -221,12 +229,28 @@ onMounted(initialLoad);
 
         <div class="date-selector">
           <span class="field-label">按日期查看</span>
-          <select v-model="selectedDate" class="select" :disabled="loading">
-            <option v-for="d in snapshotDates" :key="d" :value="d">
+          <el-date-picker
+            v-model="selectedDate"
+            type="date"
+            placeholder="选择日期"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            :disabled="loading"
+            clearable
+            class="date-picker"
+          />
+          <div v-if="snapshotDates.length > 0" class="quick-dates">
+            <button
+              v-for="d in recentSnapshotDates"
+              :key="d"
+              class="quick-date"
+              :class="{ active: d === selectedDate }"
+              @click="selectedDate = d"
+            >
               {{ formatDate(d) }}
-            </option>
-          </select>
-          <button class="btn ghost small" @click="editSelectedDate" :disabled="snapshotDates.length === 0">
+            </button>
+          </div>
+          <button class="btn ghost small" @click="editSelectedDate">
             编辑该日
           </button>
         </div>
@@ -471,10 +495,46 @@ onMounted(initialLoad);
 .date-selector {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding-left: 14px;
   margin-left: 6px;
   border-left: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.date-selector .date-picker {
+  width: 170px;
+}
+
+.quick-dates {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding-left: 6px;
+  margin-left: 2px;
+  border-left: 1px dashed var(--line);
+}
+
+.quick-date {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: "JetBrains Mono", monospace;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.quick-date:hover {
+  border-color: rgba(212, 175, 106, 0.4);
+  color: var(--gold-2);
+}
+.quick-date.active {
+  background: rgba(212, 175, 106, 0.14);
+  border-color: var(--gold);
+  color: var(--gold-2);
 }
 
 .btn {
