@@ -31,7 +31,7 @@ function emptyRow() {
     category: props.defaultCategory || "存款",
     name: "",
     value: "",
-    purchase_date: "",
+    purchase_date: date.value || todayStr(),
     purchase_price: "",
     remark: "",
   };
@@ -65,12 +65,13 @@ async function resetToLatest() {
     if (latestDate.value) {
       const snap = await getSnapshot(latestDate.value);
       latestTotal.value = snap.total || 0;
+      const defaultDate = date.value || todayStr();
       formAssets.value = (snap.assets || []).map((a) => ({
         id: a.id || null,
         category: a.category || "存款",
         name: a.name || "",
         value: formatInputValue(a.value),
-        purchase_date: a.purchase_date || "",
+        purchase_date: a.purchase_date || defaultDate,
         purchase_price:
           a.purchase_price != null && a.purchase_price !== ""
             ? formatInputValue(a.purchase_price)
@@ -156,11 +157,6 @@ function validate() {
         errs[i] = errs[i] || {};
         errs[i].purchase_price = "购买价格须为数字";
       }
-    }
-    const pd = String(a.purchase_date ?? "").trim();
-    if (pd !== "" && !/^\d{4}(-\d{1,2}(-\d{1,2})?)?$/.test(pd)) {
-      errs[i] = errs[i] || {};
-      errs[i].purchase_date = "格式：2023 / 2023-06 / 2023-06-09";
     }
   });
   errors.value = errs;
@@ -249,9 +245,7 @@ watch(
               <div class="th col-name">资产名称</div>
               <div class="th col-value">当前价值</div>
               <div class="th col-price">购买价格</div>
-              <div class="th col-date">购买日期</div>
               <div class="th col-remark">备注</div>
-              <div class="th col-action">操作</div>
             </div>
 
             <div class="table-body">
@@ -310,27 +304,8 @@ watch(
                     {{ errors[index].purchase_price }}
                   </div>
                 </div>
-                <div class="col col-date">
-                  <input
-                    v-model="item.purchase_date"
-                    class="field-input"
-                    placeholder="2023 / 2023-06 / 2023-06-09"
-                  />
-                  <div v-if="errors[index] && errors[index].purchase_date" class="err-text">
-                    {{ errors[index].purchase_date }}
-                  </div>
-                </div>
                 <div class="col col-remark">
                   <input v-model="item.remark" class="field-input" placeholder="备注" />
-                </div>
-                <div class="col col-action">
-                  <button
-                    class="link danger"
-                    @click="removeRow(index)"
-                    :disabled="formAssets.length <= 1"
-                  >
-                    删除
-                  </button>
                 </div>
               </div>
 
@@ -523,7 +498,7 @@ watch(
 
 .table-header {
   display: grid;
-  grid-template-columns: 48px 130px 1.3fr 140px 130px 170px 1fr 80px;
+  grid-template-columns: 48px 130px 1.3fr 140px 140px 1.2fr;
   align-items: center;
   padding: 12px 14px;
   background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015));
@@ -564,7 +539,7 @@ watch(
 
 .table-row {
   display: grid;
-  grid-template-columns: 48px 130px 1.3fr 140px 130px 170px 1fr 80px;
+  grid-template-columns: 48px 130px 1.3fr 140px 140px 1.2fr;
   align-items: center;
   padding: 12px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
@@ -746,7 +721,7 @@ watch(
 @media (max-width: 820px) {
   .table-header,
   .table-row {
-    grid-template-columns: 36px 90px 1fr 100px 100px 110px 1fr 60px;
+    grid-template-columns: 36px 90px 1.3fr 100px 100px 1fr;
     gap: 6px;
     padding: 10px;
   }

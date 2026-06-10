@@ -67,7 +67,9 @@ async function initialLoad() {
 }
 
 function openBatchForm(targetDate) {
-  batchInitialDate.value = targetDate || selectedDate.value || todayStr();
+  const isValid = typeof targetDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(targetDate);
+  batchInitialDate.value =
+    (isValid ? targetDate : null) || selectedDate.value || todayStr();
   batchVisible.value = true;
 }
 
