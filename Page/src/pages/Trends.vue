@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
-import { getSnapshots, getChanges } from '../api/assets.js';
+import { getSnapshots, getChanges, getAssetHistory } from '../api/assets.js';
 import {
   formatCurrency,
   formatSignedCurrency,
@@ -14,12 +14,29 @@ import { useChart } from '../utils/useChart.js';
 const start = ref(daysAgoStr(30));
 const end = ref(todayStr());
 const granularity = ref('day');
+const chartMode = ref('total'); // total(净资产) / category(分类叠加) / items(细项资产)
 const loading = ref(false);
 
 const trend = ref({ dates: [], totals: [], by_category: [] });
 const changes = ref({ daily: [], by_category: [], top_items: [] });
+const itemHistories = ref([]); // [{ name, values }] 并行数组，与 trend.dates 对齐
+let isInitialLoading = true;
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function applyToday() {
+  end.value = todayStr();
+}
+
+function applyRange(days) {
+  start.value = daysAgoStr(days);
+  end.value = todayStr();
+}
 
 async function load() {
+  if (!start.value || !end.value) return;
   loading.value = true;
   try {
     const [t, c] = await Promise.all([
@@ -32,19 +49,46 @@ async function load() {
     ]);
     trend.value = t;
     changes.value = c;
+
+    // 更细粒度：拉取 top 变动项各自的历史，用于"细项资产"走势图
+    const topItems = (changes.value && changes.value.top_items) || [];
+    const list = topItems.slice(0, 6);
+    if (list.length > 0) {
+      const histories = await Promise.all(
+        list.map((it) =>
+          getAssetHistory(it.id, { start: start.value, end: end.value })
+            .then((r) => ({ name: it.name, history: (r && r.history) || [] }))
+            .catch(() => ({ name: it.name, history: [] }))
+        )
+      );
+      const dates = (trend.value && trend.value.dates) || [];
+      itemHistories.value = histories.map((h) => {
+        const map = {};
+        (h.history || []).forEach((pt) => {
+          if (pt && pt.snapshot_date) map[pt.snapshot_date] = Number(pt.value || 0);
+        });
+        let last = null;
+        const values = dates.map((d) => {
+          if (d in map) last = map[d];
+          return last;
+        });
+        return { name: h.name, values };
+      });
+    } else {
+      itemHistories.value = [];
+    }
+
     refreshAll();
+    itemsChart.refresh();
   } finally {
     loading.value = false;
   }
 }
 
-function applyToday() {
-  end.value = todayStr();
-}
-
-function applyRange(days) {
-  start.value = daysAgoStr(days);
-  end.value = todayStr();
+async function initialLoad() {
+  isInitialLoading = true;
+  await load();
+  isInitialLoading = false;
 }
 
 const netChange = computed(() => {
@@ -296,10 +340,66 @@ const radarOption = () => {
   };
 };
 
+// 细项资产折线图（更细粒度的走势图）
+const itemsOption = () => {
+  const dates = (trend.value && trend.value.dates) || [];
+  const items = itemHistories.value || [];
+  const palette2 = ['#7aa6ff', '#ffb48a', '#c488ff', '#85e3ff', '#d4af6a', '#4fd1a5'];
+  return {
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (v) => (v == null ? '-' : formatCurrency(v)),
+      backgroundColor: 'rgba(12,16,28,0.94)',
+      borderColor: 'rgba(212, 175, 106, 0.35)',
+      textStyle: { color: '#e9ecf5', fontFamily: 'JetBrains Mono, monospace', fontSize: 12 },
+    },
+    legend: {
+      top: 0,
+      textStyle: { color: '#c8cfe2', fontFamily: 'Inter, sans-serif', fontSize: 12 },
+      itemGap: 14,
+    },
+    grid: { left: 70, right: 30, top: 50, bottom: 50 },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      boundaryGap: false,
+      axisLabel: { color: '#8a93ad', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
+      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
+      axisTick: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: {
+        color: '#8a93ad',
+        fontFamily: 'JetBrains Mono, monospace',
+        fontSize: 11,
+        formatter: (v) => {
+          if (v === 0) return '0';
+          if (Math.abs(v) >= 10000) return (v / 10000).toFixed(1) + '万';
+          return v;
+        },
+      },
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
+    },
+    series: items.map((h, i) => ({
+      name: h.name,
+      type: 'line',
+      smooth: true,
+      showSymbol: false,
+      connectNulls: false,
+      lineStyle: { width: 2, color: palette2[i % palette2.length] },
+      itemStyle: { color: palette2[i % palette2.length] },
+      data: h.values,
+      emphasis: { focus: 'series' },
+    })),
+  };
+};
+
 const lineChart = useChart(lineOption);
 const stackChart = useChart(stackOption);
 const changeChart = useChart(changeBarOption);
 const radarChart = useChart(radarOption);
+const itemsChart = useChart(itemsOption);
 
 function refreshAll() {
   lineChart.refresh();
@@ -315,8 +415,12 @@ const quickRanges = [
   { label: '近180天', days: 180 },
 ];
 
-onMounted(load);
-watch([start, end, granularity], load);
+onMounted(initialLoad);
+watch([start, end, granularity], (vals, oldVals) => {
+  if (isInitialLoading) return;
+  const changed = vals.some((v, i) => v !== oldVals[i]);
+  if (changed) load();
+});
 </script>
 
 <template>
@@ -352,11 +456,19 @@ watch([start, end, granularity], load);
           <button
             class="seg-item"
             :class="{ active: granularity === 'day' }"
+            :disabled="loading"
             @click="granularity = 'day'"
           >日</button>
           <button
             class="seg-item"
+            :class="{ active: granularity === 'week' }"
+            :disabled="loading"
+            @click="granularity = 'week'"
+          >周</button>
+          <button
+            class="seg-item"
             :class="{ active: granularity === 'month' }"
+            :disabled="loading"
             @click="granularity = 'month'"
           >月</button>
         </div>
@@ -365,16 +477,18 @@ watch([start, end, granularity], load);
 
         <button
           class="btn ghost small"
+          :disabled="loading"
           @click="applyToday"
         >今日</button>
         <button
           v-for="r in quickRanges"
           :key="r.days"
           class="btn ghost small"
+          :disabled="loading"
           @click="applyRange(r.days)"
         >{{ r.label }}</button>
 
-        <button class="btn primary small" @click="load">
+        <button class="btn primary small" :disabled="loading" @click="load">
           <span class="btn-icon">⟳</span>
           <span>刷新</span>
         </button>
@@ -427,6 +541,18 @@ watch([start, end, granularity], load);
             <span class="chart-desc">雷达图 · 相对规模</span>
           </div>
           <div class="chart-inner" :ref="radarChart.el" />
+        </div>
+
+        <div class="chart-card span-2">
+          <div class="chart-head">
+            <span class="chart-title">细项资产走势</span>
+            <span class="chart-desc">Top 变动项 · 逐日期价值</span>
+          </div>
+          <div v-if="itemHistories.length === 0" class="chart-empty">
+            <div class="empty-glyph">◇</div>
+            <div>暂无细项数据</div>
+          </div>
+          <div class="chart-inner" :ref="itemsChart.el" v-show="itemHistories.length > 0" />
         </div>
       </section>
 

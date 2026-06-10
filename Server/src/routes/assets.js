@@ -440,7 +440,8 @@ router.post("/batch-snapshot", (req, res) => {
 router.get("/snapshots", (req, res) => {
   const start = parseDate(req.query.start);
   const end = parseDate(req.query.end) || todayStr();
-  const granularity = req.query.granularity === "month" ? "month" : "day";
+  const g = String(req.query.granularity || "day").toLowerCase();
+  const granularity = g === "month" ? "month" : g === "week" ? "week" : "day";
   if (!start)
     return res.status(400).json({ error: "start 参数必须是 YYYY-MM-DD" });
   if (start > end) return res.status(400).json({ error: "start 不能晚于 end" });
@@ -476,6 +477,44 @@ router.get("/snapshots", (req, res) => {
         dateEnd: `${key}-${String(endDay).padStart(2, "0")}`,
       };
     });
+    labels = buckets.map((b) => b.label);
+  } else if (granularity === "week") {
+    const s = new Date(`${start}T00:00:00`);
+    const e = new Date(`${end}T00:00:00`);
+    // 以每周的星期日为桶结束日，labels 使用周结束日 YYYY-MM-DD
+    const bucketsList = [];
+    // 先找到第一个 ≥ start 的周日（或等于 end 的日期）
+    const first = new Date(s);
+    const dayOfWeek = first.getDay(); // 0=Sun..6=Sat
+    const diffToSun = (7 - dayOfWeek) % 7;
+    first.setDate(first.getDate() + diffToSun);
+    // 如果 first 比 start 还小一周内，保持为 first；若 first > e，则只取 end
+    let cur = new Date(first);
+    if (cur.getTime() < s.getTime()) cur.setDate(cur.getDate() + 7);
+    while (cur.getTime() <= e.getTime()) {
+      const y = cur.getFullYear();
+      const m = String(cur.getMonth() + 1).padStart(2, "0");
+      const d = String(cur.getDate()).padStart(2, "0");
+      bucketsList.push({
+        key: `${y}-${m}-${d}`,
+        label: `${y}-${m}-${d}`,
+        dateEnd: `${y}-${m}-${d}`,
+      });
+      cur.setDate(cur.getDate() + 7);
+    }
+    // 确保最后一个桶至少覆盖到 end
+    const last = bucketsList[bucketsList.length - 1];
+    if (!last || last.dateEnd < end) {
+      const ye = e.getFullYear();
+      const me = String(e.getMonth() + 1).padStart(2, "0");
+      const de = String(e.getDate()).padStart(2, "0");
+      bucketsList.push({
+        key: `${ye}-${me}-${de}`,
+        label: `${ye}-${me}-${de}`,
+        dateEnd: `${ye}-${me}-${de}`,
+      });
+    }
+    buckets = bucketsList;
     labels = buckets.map((b) => b.label);
   } else {
     const dates = dateRange(start, end);

@@ -6,19 +6,48 @@ import BatchForm from '../components/BatchForm.vue';
 import { formatCurrency, formatPercent, formatDate, todayStr } from '../utils/format.js';
 import { useChart } from '../utils/useChart.js';
 
-const snapshotDate = ref(todayStr());
+const snapshotDate = ref('');
 const loading = ref(false);
 const snapshot = ref({ assets: [], total: 0, by_category: [] });
 const snapshotDates = ref([]);
+let isInitialLoading = true;
 
 const batchVisible = ref(false);
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function shiftDate(delta) {
+  if (!snapshotDate.value) return;
+  const [y, m, d] = snapshotDate.value.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  snapshotDate.value = `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+
+function goPrev() {
+  shiftDate(-1);
+}
+
+function goNext() {
+  shiftDate(1);
+}
+
+function goToday() {
+  snapshotDate.value = todayStr();
+}
+
+function pickSnapshotDate(d) {
+  snapshotDate.value = d;
+}
 
 async function loadSnapshotDates() {
   try {
     const res = await listSnapshotDates();
     const list = (res && res.dates) || [];
     snapshotDates.value = list;
-    if (list.length > 0 && !list.includes(snapshotDate.value)) {
+    if (list.length > 0 && !snapshotDate.value) {
       snapshotDate.value = list[0];
     }
   } catch (e) {
@@ -27,6 +56,7 @@ async function loadSnapshotDates() {
 }
 
 async function loadSnapshot() {
+  if (!snapshotDate.value) return;
   loading.value = true;
   try {
     const data = await getSnapshot(snapshotDate.value);
@@ -42,27 +72,16 @@ async function loadSnapshot() {
 }
 
 async function initialLoad() {
+  isInitialLoading = true;
   await loadSnapshotDates();
+  if (!snapshotDate.value) {
+    snapshotDate.value = todayStr();
+  }
   await loadSnapshot();
+  isInitialLoading = false;
 }
 
 const recentSnapshotDates = computed(() => (snapshotDates.value || []).slice(0, 5));
-
-function goPrev() {
-  const d = new Date(`${snapshotDate.value}T00:00:00`);
-  d.setDate(d.getDate() - 1);
-  snapshotDate.value = d.toISOString().slice(0, 10);
-}
-
-function goNext() {
-  const d = new Date(`${snapshotDate.value}T00:00:00`);
-  d.setDate(d.getDate() + 1);
-  snapshotDate.value = d.toISOString().slice(0, 10);
-}
-
-function goToday() {
-  snapshotDate.value = todayStr();
-}
 
 function editThisDate() {
   batchVisible.value = true;
@@ -197,7 +216,10 @@ const barOption = () => {
 const bar = useChart(barOption);
 
 onMounted(initialLoad);
-watch(snapshotDate, loadSnapshot);
+watch(snapshotDate, (val, oldVal) => {
+  if (isInitialLoading || !val || val === oldVal) return;
+  loadSnapshot();
+});
 </script>
 
 <template>
@@ -222,9 +244,9 @@ watch(snapshotDate, loadSnapshot);
             clearable
             class="date-picker"
           />
-          <button class="btn ghost small nav-btn" @click="goPrev" title="前一天">◀</button>
-          <button class="btn ghost small nav-btn" @click="goNext" title="下一天">▶</button>
-          <button class="btn ghost small" @click="goToday">今日</button>
+          <button class="btn ghost small nav-btn" :disabled="loading" @click="goPrev" title="前一天">◀</button>
+          <button class="btn ghost small nav-btn" :disabled="loading" @click="goNext" title="下一天">▶</button>
+          <button class="btn ghost small" :disabled="loading" @click="goToday">今日</button>
 
           <div v-if="snapshotDates.length > 0" class="quick-dates">
             <button
@@ -232,12 +254,13 @@ watch(snapshotDate, loadSnapshot);
               :key="d"
               class="quick-date"
               :class="{ active: d === snapshotDate }"
-              @click="snapshotDate = d"
+              :disabled="loading"
+              @click="pickSnapshotDate(d)"
             >
               {{ formatDate(d) }}
             </button>
           </div>
-          <button class="btn ghost small" @click="loadSnapshot">⟳ 刷新</button>
+          <button class="btn ghost small" :disabled="loading" @click="loadSnapshot">⟳ 刷新</button>
         </div>
       </div>
       <div class="tool-right">
