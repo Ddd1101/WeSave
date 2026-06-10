@@ -1,27 +1,52 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
-import { getSnapshot } from '../api/assets.js';
+import { ElMessage } from 'element-plus';
+import { getSnapshot, listSnapshotDates } from '../api/assets.js';
 import BatchForm from '../components/BatchForm.vue';
-import { formatCurrency, formatPercent, todayStr } from '../utils/format.js';
+import { formatCurrency, formatPercent, formatDate, todayStr } from '../utils/format.js';
 import { useChart } from '../utils/useChart.js';
 
 const snapshotDate = ref(todayStr());
 const loading = ref(false);
 const snapshot = ref({ assets: [], total: 0, by_category: [] });
+const snapshotDates = ref([]);
 
 const batchVisible = ref(false);
 
-async function load() {
+async function loadSnapshotDates() {
+  try {
+    const res = await listSnapshotDates();
+    const list = (res && res.dates) || [];
+    snapshotDates.value = list;
+    if (list.length > 0 && !list.includes(snapshotDate.value)) {
+      snapshotDate.value = list[0];
+    }
+  } catch (e) {
+    snapshotDates.value = [];
+  }
+}
+
+async function loadSnapshot() {
   loading.value = true;
   try {
     const data = await getSnapshot(snapshotDate.value);
     snapshot.value = data;
     pie.refresh();
     bar.refresh();
+  } catch (e) {
+    ElMessage.error('加载快照失败：' + (e.message || e));
+    snapshot.value = { assets: [], total: 0, by_category: [] };
   } finally {
     loading.value = false;
   }
 }
+
+async function initialLoad() {
+  await loadSnapshotDates();
+  await loadSnapshot();
+}
+
+const recentSnapshotDates = computed(() => (snapshotDates.value || []).slice(0, 5));
 
 function goPrev() {
   const d = new Date(`${snapshotDate.value}T00:00:00`);
@@ -44,7 +69,7 @@ function editThisDate() {
 }
 
 function onBatchSaved() {
-  load();
+  loadSnapshotDates().then(loadSnapshot);
 }
 
 function categoryClass(name) {
@@ -171,10 +196,8 @@ const barOption = () => {
 
 const bar = useChart(barOption);
 
-onMounted(load);
-watch(snapshotDate, async () => {
-  await load();
-});
+onMounted(initialLoad);
+watch(snapshotDate, loadSnapshot);
 </script>
 
 <template>
@@ -182,17 +205,40 @@ watch(snapshotDate, async () => {
     <!-- 工具栏 -->
     <section class="toolbar">
       <div class="tool-left">
-        <span class="tool-label">查询日期</span>
-        <input type="date" v-model="snapshotDate" class="date-input" />
-        <button class="btn ghost small" @click="goPrev">◀ 前一天</button>
-        <button class="btn ghost small" @click="goNext">下一天 ▶</button>
-        <button class="btn primary small" @click="goToday">今日</button>
-        <button class="btn ghost small" @click="load">⟳ 刷新</button>
-        <div class="divider" />
-        <button class="btn ghost small edit-btn" @click="editThisDate">
-          <span class="btn-icon">✎</span>
-          <span>编辑该日快照</span>
+        <button class="btn primary" @click="editThisDate">
+          <span class="btn-icon">＋</span>
+          <span>录入 / 编辑该日快照</span>
         </button>
+
+        <div class="date-selector">
+          <span class="field-label">快照日期</span>
+          <el-date-picker
+            v-model="snapshotDate"
+            type="date"
+            placeholder="选择日期"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            :disabled="loading"
+            clearable
+            class="date-picker"
+          />
+          <button class="btn ghost small nav-btn" @click="goPrev" title="前一天">◀</button>
+          <button class="btn ghost small nav-btn" @click="goNext" title="下一天">▶</button>
+          <button class="btn ghost small" @click="goToday">今日</button>
+
+          <div v-if="snapshotDates.length > 0" class="quick-dates">
+            <button
+              v-for="d in recentSnapshotDates"
+              :key="d"
+              class="quick-date"
+              :class="{ active: d === snapshotDate }"
+              @click="snapshotDate = d"
+            >
+              {{ formatDate(d) }}
+            </button>
+          </div>
+          <button class="btn ghost small" @click="loadSnapshot">⟳ 刷新</button>
+        </div>
       </div>
       <div class="tool-right">
         <div class="date-hint">
@@ -363,7 +409,7 @@ watch(snapshotDate, async () => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 20px;
+  padding: 16px 20px;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -371,82 +417,121 @@ watch(snapshotDate, async () => {
   box-shadow: var(--shadow-1);
 }
 
-.tool-left {
+.tool-left,
+.tool-right {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.tool-label {
-  color: var(--ink-2);
+.field-label {
   font-size: 11px;
-  letter-spacing: 3px;
+  letter-spacing: 2px;
+  color: var(--ink-2);
   text-transform: uppercase;
 }
 
-.date-input {
-  background: rgba(0, 0, 0, 0.25);
+.date-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 14px;
+  margin-left: 6px;
+  border-left: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.date-selector .date-picker {
+  width: 170px;
+}
+
+.quick-dates {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding-left: 6px;
+  margin-left: 2px;
+  border-left: 1px dashed var(--line);
+}
+
+.quick-date {
+  background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--line);
-  color: var(--ink-0);
-  padding: 8px 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-family: 'JetBrains Mono', monospace;
-  outline: none;
-  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  color: var(--ink-2);
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: "JetBrains Mono", monospace;
+  transition: all 0.15s ease;
+  white-space: nowrap;
 }
-
-.date-input:focus {
+.quick-date:hover {
+  border-color: rgba(212, 175, 106, 0.4);
+  color: var(--gold-2);
+}
+.quick-date.active {
+  background: rgba(212, 175, 106, 0.14);
   border-color: var(--gold);
-  background: var(--gold-soft);
-  box-shadow: 0 0 0 3px rgba(212, 175, 106, 0.15);
-}
-
-.divider {
-  width: 1px;
-  height: 22px;
-  background: var(--line);
-  margin: 0 4px;
+  color: var(--gold-2);
 }
 
 .btn {
   border: 1px solid var(--line-strong);
   background: rgba(255, 255, 255, 0.02);
   color: var(--ink-1);
-  padding: 8px 14px;
-  border-radius: 10px;
-  font-size: 12px;
+  padding: 10px 16px;
+  border-radius: 11px;
+  font-size: 13px;
   letter-spacing: 1px;
   cursor: pointer;
-  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
-  font-family: inherit;
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   white-space: nowrap;
+  font-family: inherit;
 }
 
-.btn:hover { transform: translateY(-1px); background: rgba(255, 255, 255, 0.05); border-color: rgba(212, 175, 106, 0.3); }
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(212, 175, 106, 0.3);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-icon {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--gold);
+  font-size: 14px;
+}
 
 .btn.primary {
-  background: linear-gradient(135deg, var(--gold), #b98644);
+  background: linear-gradient(135deg, #d4af6a, #b98644);
   color: #1a1206;
   border: 1px solid rgba(255, 255, 255, 0.25);
   font-weight: 600;
   box-shadow: var(--shadow-gold);
 }
-
-.btn-icon { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--gold); font-size: 13px; }
 .btn.primary .btn-icon { color: #1a1206; }
 
 .btn.ghost { background: transparent; }
-.btn.small { padding: 7px 12px; font-size: 12px; }
 
-.edit-btn {
-  background: linear-gradient(135deg, rgba(212, 175, 106, 0.12), transparent);
-  border-color: rgba(212, 175, 106, 0.3);
-  color: var(--gold-2);
+.btn.small {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.btn.nav-btn {
+  padding: 8px 10px;
+  min-width: 34px;
+  justify-content: center;
 }
 
 .date-hint {

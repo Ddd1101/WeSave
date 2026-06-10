@@ -5,6 +5,7 @@ import {
   formatCurrency,
   formatSignedCurrency,
   formatSignedPercent,
+  formatDate,
   todayStr,
   daysAgoStr,
 } from '../utils/format.js';
@@ -35,6 +36,15 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+function applyToday() {
+  end.value = todayStr();
+}
+
+function applyRange(days) {
+  start.value = daysAgoStr(days);
+  end.value = todayStr();
 }
 
 const netChange = computed(() => {
@@ -305,11 +315,6 @@ const quickRanges = [
   { label: '近180天', days: 180 },
 ];
 
-function setRange(days) {
-  start.value = daysAgoStr(days);
-  end.value = todayStr();
-}
-
 onMounted(load);
 watch([start, end, granularity], load);
 </script>
@@ -319,11 +324,30 @@ watch([start, end, granularity], load);
     <!-- 控制栏 -->
     <section class="toolbar">
       <div class="tool-left">
-        <span class="tool-label">日期范围</span>
-        <input type="date" v-model="start" class="date-input" />
+        <span class="field-label">日期范围</span>
+        <el-date-picker
+          v-model="start"
+          type="date"
+          placeholder="开始日期"
+          format="YYYY-MM-DD"
+          value-format="YYYY-MM-DD"
+          :disabled="loading"
+          clearable
+          class="date-picker"
+        />
         <span class="sep">至</span>
-        <input type="date" v-model="end" class="date-input" />
-        <span class="tool-label" style="margin-left:10px;">粒度</span>
+        <el-date-picker
+          v-model="end"
+          type="date"
+          placeholder="结束日期"
+          format="YYYY-MM-DD"
+          value-format="YYYY-MM-DD"
+          :disabled="loading"
+          clearable
+          class="date-picker"
+        />
+
+        <span class="field-label" style="margin-left:10px;">粒度</span>
         <div class="seg-wrap">
           <button
             class="seg-item"
@@ -340,10 +364,14 @@ watch([start, end, granularity], load);
         <div class="divider" />
 
         <button
+          class="btn ghost small"
+          @click="applyToday"
+        >今日</button>
+        <button
           v-for="r in quickRanges"
           :key="r.days"
           class="btn ghost small"
-          @click="setRange(r.days)"
+          @click="applyRange(r.days)"
         >{{ r.label }}</button>
 
         <button class="btn primary small" @click="load">
@@ -533,36 +561,33 @@ watch([start, end, granularity], load);
   gap: 16px;
 }
 
-.tool-left {
+.tool-left,
+.tool-right {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.tool-label {
-  color: var(--ink-2);
+.field-label {
   font-size: 11px;
-  letter-spacing: 3px;
+  letter-spacing: 2px;
+  color: var(--ink-2);
   text-transform: uppercase;
 }
 
-.date-input {
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid var(--line);
-  color: var(--ink-0);
-  padding: 8px 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-family: 'JetBrains Mono', monospace;
-  outline: none;
-  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+.date-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 14px;
+  margin-left: 6px;
+  border-left: 1px solid var(--line);
+  flex-wrap: wrap;
 }
 
-.date-input:focus {
-  border-color: var(--gold);
-  background: var(--gold-soft);
-  box-shadow: 0 0 0 3px rgba(212, 175, 106, 0.15);
+.date-picker {
+  width: 170px;
 }
 
 .sep {
@@ -610,22 +635,28 @@ watch([start, end, granularity], load);
   border: 1px solid var(--line-strong);
   background: rgba(255, 255, 255, 0.02);
   color: var(--ink-1);
-  padding: 8px 14px;
-  border-radius: 10px;
-  font-size: 12px;
+  padding: 10px 16px;
+  border-radius: 11px;
+  font-size: 13px;
   letter-spacing: 1px;
   cursor: pointer;
-  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   font-family: inherit;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  white-space: nowrap;
 }
 
-.btn:hover {
+.btn:hover:not(:disabled) {
   transform: translateY(-1px);
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(212, 175, 106, 0.3);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .btn.primary {
@@ -640,7 +671,7 @@ watch([start, end, granularity], load);
   font-family: 'JetBrains Mono', monospace;
   font-weight: 700;
   color: var(--gold);
-  font-size: 13px;
+  font-size: 14px;
 }
 .btn.primary .btn-icon { color: #1a1206; }
 
