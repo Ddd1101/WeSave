@@ -374,7 +374,7 @@ watch([start, end, granularity], load);
             <span class="chart-title">净资产趋势</span>
             <span class="chart-desc">面积折线图 · 日期序列</span>
           </div>
-          <div class="chart-inner" ref="lineChart.el" />
+          <div class="chart-inner" :ref="lineChart.el" />
         </div>
 
         <div class="chart-card span-2">
@@ -382,7 +382,7 @@ watch([start, end, granularity], load);
             <span class="chart-title">分类资产价值</span>
             <span class="chart-desc">堆叠面积 · 按分类叠加</span>
           </div>
-          <div class="chart-inner" ref="stackChart.el" />
+          <div class="chart-inner" :ref="stackChart.el" />
         </div>
 
         <div class="chart-card">
@@ -390,7 +390,7 @@ watch([start, end, granularity], load);
             <span class="chart-title">每日净变化</span>
             <span class="chart-desc">柱状图 · 正/负分色</span>
           </div>
-          <div class="chart-inner" ref="changeChart.el" />
+          <div class="chart-inner" :ref="changeChart.el" />
         </div>
 
         <div class="chart-card">
@@ -398,7 +398,7 @@ watch([start, end, granularity], load);
             <span class="chart-title">期末分类构成</span>
             <span class="chart-desc">雷达图 · 相对规模</span>
           </div>
-          <div class="chart-inner" ref="radarChart.el" />
+          <div class="chart-inner" :ref="radarChart.el" />
         </div>
       </section>
 

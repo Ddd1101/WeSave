@@ -265,7 +265,7 @@ watch(snapshotDate, async () => {
           <div class="empty-glyph">◇</div>
           <div>该日期暂无资产数据</div>
         </div>
-        <div class="chart-inner" ref="pie.el" v-show="!loading && snapshot.by_category.length > 0" />
+        <div class="chart-inner" :ref="pie.el" v-show="!loading && snapshot.by_category.length > 0" />
       </div>
 
       <div class="chart-card">
@@ -281,7 +281,7 @@ watch(snapshotDate, async () => {
           <div class="empty-glyph">◇</div>
           <div>该日期暂无资产数据</div>
         </div>
-        <div class="chart-inner" ref="bar.el" v-show="!loading && topAssets.length > 0" />
+        <div class="chart-inner" :ref="bar.el" v-show="!loading && topAssets.length > 0" />
       </div>
     </section>
 

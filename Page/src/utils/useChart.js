@@ -1,4 +1,4 @@
-import { ref, onBeforeUnmount, watch, nextTick } from "vue";
+import { ref, onMounted, onBeforeUnmount, nextTick } from "vue";
 import * as echarts from "echarts/core";
 import { BarChart, LineChart, PieChart, RadarChart } from "echarts/charts";
 import {
@@ -33,7 +33,13 @@ const instances = new Set();
 function ensureResize() {
   if (resizeHandler) return;
   resizeHandler = () => {
-    instances.forEach((ins) => ins.resize());
+    instances.forEach((ins) => {
+      try {
+        ins.resize();
+      } catch (_) {
+        /* ignore */
+      }
+    });
   };
   window.addEventListener("resize", resizeHandler);
 }
@@ -43,23 +49,53 @@ export function useChart(getOption, opts = {}) {
   let chart = null;
 
   function mount() {
+    if (chart) return;
     if (!el.value) return;
-    chart = echarts.init(el.value, opts.theme || null, { renderer: "canvas" });
+    try {
+      chart = echarts.init(el.value, opts.theme || null, {
+        renderer: "canvas",
+      });
+    } catch (err) {
+      console.warn("[useChart] echarts.init failed:", err);
+      return;
+    }
     instances.add(chart);
     ensureResize();
     chart.setOption(getOption() || {});
   }
 
   function refresh() {
-    if (!chart) return;
+    if (!chart) {
+      nextTick(() => {
+        mount();
+        if (chart) {
+          nextTick(() => chart.resize());
+        }
+      });
+      return;
+    }
     chart.setOption(getOption() || {}, true);
+    nextTick(() => {
+      try {
+        chart && chart.resize();
+      } catch (_) {
+        /* ignore */
+      }
+    });
   }
 
   function resize() {
     chart && chart.resize();
   }
 
-  nextTick(mount);
+  onMounted(() => {
+    nextTick(() => {
+      mount();
+      if (chart) {
+        nextTick(() => chart.resize());
+      }
+    });
+  });
 
   onBeforeUnmount(() => {
     if (chart) {
