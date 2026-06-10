@@ -149,6 +149,19 @@ function validate() {
       errs[i] = errs[i] || {};
       errs[i].value = "请输入有效数字";
     }
+    const pp = a.purchase_price;
+    if (pp !== "" && pp !== null && pp !== undefined) {
+      const ppNum = Number(pp);
+      if (!Number.isFinite(ppNum)) {
+        errs[i] = errs[i] || {};
+        errs[i].purchase_price = "购买价格须为数字";
+      }
+    }
+    const pd = String(a.purchase_date ?? "").trim();
+    if (pd !== "" && !/^\d{4}(-\d{1,2}(-\d{1,2})?)?$/.test(pd)) {
+      errs[i] = errs[i] || {};
+      errs[i].purchase_date = "格式：2023 / 2023-06 / 2023-06-09";
+    }
   });
   errors.value = errs;
   return Object.keys(errs).length === 0;
@@ -235,68 +248,98 @@ watch(
               <div class="th col-category">类别</div>
               <div class="th col-name">资产名称</div>
               <div class="th col-value">当前价值</div>
+              <div class="th col-price">购买价格</div>
+              <div class="th col-date">购买日期</div>
               <div class="th col-remark">备注</div>
               <div class="th col-action">操作</div>
             </div>
 
-            <div
-              v-for="(item, index) in formAssets"
-              :key="index"
-              class="table-row"
-              :class="{ 'row-error': errors[index] }"
-            >
-              <div class="col col-index">{{ index + 1 }}</div>
-              <div class="col col-category">
-                <select v-model="item.category" class="field-input">
-                  <option v-for="opt in categoryOptions" :key="opt" :value="opt">
-                    {{ opt }}
-                  </option>
-                </select>
-                <div v-if="errors[index] && errors[index].category" class="err-text">
-                  {{ errors[index].category }}
+            <div class="table-body">
+              <div
+                v-for="(item, index) in formAssets"
+                :key="index"
+                class="table-row"
+                :class="{ 'row-error': errors[index] }"
+              >
+                <div class="col col-index">{{ index + 1 }}</div>
+                <div class="col col-category">
+                  <select v-model="item.category" class="field-input">
+                    <option v-for="opt in categoryOptions" :key="opt" :value="opt">
+                      {{ opt }}
+                    </option>
+                  </select>
+                  <div v-if="errors[index] && errors[index].category" class="err-text">
+                    {{ errors[index].category }}
+                  </div>
                 </div>
-              </div>
-              <div class="col col-name">
-                <input
-                  v-model="item.name"
-                  class="field-input"
-                  placeholder="资产名称"
-                />
-                <div v-if="errors[index] && errors[index].name" class="err-text">
-                  {{ errors[index].name }}
-                </div>
-              </div>
-              <div class="col col-value">
-                <div class="field-input money">
-                  <span class="prefix">¥</span>
+                <div class="col col-name">
                   <input
-                    type="text"
-                    inputmode="decimal"
-                    v-model="item.value"
-                    placeholder="0.00"
+                    v-model="item.name"
+                    class="field-input"
+                    placeholder="资产名称"
                   />
+                  <div v-if="errors[index] && errors[index].name" class="err-text">
+                    {{ errors[index].name }}
+                  </div>
                 </div>
-                <div v-if="errors[index] && errors[index].value" class="err-text">
-                  {{ errors[index].value }}
+                <div class="col col-value">
+                  <div class="field-input money">
+                    <span class="prefix">¥</span>
+                    <input
+                      type="text"
+                      inputmode="decimal"
+                      v-model="item.value"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div v-if="errors[index] && errors[index].value" class="err-text">
+                    {{ errors[index].value }}
+                  </div>
+                </div>
+                <div class="col col-price">
+                  <div class="field-input money">
+                    <span class="prefix">¥</span>
+                    <input
+                      type="text"
+                      inputmode="decimal"
+                      v-model="item.purchase_price"
+                      placeholder="可选"
+                    />
+                  </div>
+                  <div v-if="errors[index] && errors[index].purchase_price" class="err-text">
+                    {{ errors[index].purchase_price }}
+                  </div>
+                </div>
+                <div class="col col-date">
+                  <input
+                    v-model="item.purchase_date"
+                    class="field-input"
+                    placeholder="2023 / 2023-06 / 2023-06-09"
+                  />
+                  <div v-if="errors[index] && errors[index].purchase_date" class="err-text">
+                    {{ errors[index].purchase_date }}
+                  </div>
+                </div>
+                <div class="col col-remark">
+                  <input v-model="item.remark" class="field-input" placeholder="备注" />
+                </div>
+                <div class="col col-action">
+                  <button
+                    class="link danger"
+                    @click="removeRow(index)"
+                    :disabled="formAssets.length <= 1"
+                  >
+                    删除
+                  </button>
                 </div>
               </div>
-              <div class="col col-remark">
-                <input v-model="item.remark" class="field-input" placeholder="备注" />
-              </div>
-              <div class="col col-action">
-                <button
-                  class="link danger"
-                  @click="removeRow(index)"
-                  :disabled="formAssets.length <= 1"
-                >
-                  删除
+
+              <div class="table-footer-row">
+                <button class="btn ghost add-row" @click="addRow">
+                  <span class="plus">＋</span> 添加资产行
                 </button>
               </div>
             </div>
-
-            <button class="btn ghost add-row" @click="addRow">
-              <span class="plus">＋</span> 添加资产行
-            </button>
           </div>
 
           <div class="footer-summary">
@@ -469,11 +512,15 @@ watch(
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 14px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  min-height: 260px;
 }
 
 .table-header {
   display: grid;
-  grid-template-columns: 48px 130px 1.3fr 160px 1fr 80px;
+  grid-template-columns: 48px 130px 1.3fr 140px 130px 170px 1fr 80px;
   align-items: center;
   padding: 10px 14px;
   background: rgba(255, 255, 255, 0.025);
@@ -482,15 +529,42 @@ watch(
   letter-spacing: 2px;
   color: #8a93ad;
   text-transform: uppercase;
+  flex: 0 0 auto;
+}
+
+.table-body {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(212, 175, 106, 0.35) transparent;
+}
+
+.table-body::-webkit-scrollbar {
+  width: 8px;
+}
+.table-body::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 106, 0.3);
+  border-radius: 4px;
+}
+.table-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 106, 0.5);
+}
+.table-body::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .table-row {
   display: grid;
-  grid-template-columns: 48px 130px 1.3fr 160px 1fr 80px;
+  grid-template-columns: 48px 130px 1.3fr 140px 130px 170px 1fr 80px;
   align-items: center;
   padding: 10px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   gap: 8px;
+}
+
+.table-footer-row {
+  padding: 10px 14px;
 }
 
 .table-row.row-error {
@@ -516,9 +590,8 @@ watch(
 }
 
 .add-row {
-  margin: 10px 14px;
   justify-content: center;
-  width: calc(100% - 28px);
+  width: 100%;
 }
 
 .footer-summary {
@@ -658,7 +731,7 @@ watch(
 @media (max-width: 820px) {
   .table-header,
   .table-row {
-    grid-template-columns: 36px 100px 1fr 120px 1fr 60px;
+    grid-template-columns: 36px 90px 1fr 100px 100px 110px 1fr 60px;
     gap: 6px;
     padding: 10px;
   }

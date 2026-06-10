@@ -312,8 +312,8 @@ router.post("/batch-snapshot", (req, res) => {
       const category = String(a.category).trim();
       const name = String(a.name).trim();
       const value = Number(a.value);
-      const purchaseDate = a.purchase_date || null;
-      const purchasePrice =
+      let purchaseDate = a.purchase_date || null;
+      let purchasePrice =
         a.purchase_price !== undefined &&
         a.purchase_price !== "" &&
         a.purchase_price !== null
@@ -322,46 +322,66 @@ router.post("/batch-snapshot", (req, res) => {
       const remark = a.remark || null;
 
       let assetId = null;
+      let existingAsset = null;
       if (a.id) {
-        const existing = db
-          .prepare("SELECT id FROM assets WHERE id = ?")
+        existingAsset = db
+          .prepare("SELECT * FROM assets WHERE id = ?")
           .get(Number(a.id));
-        if (existing) {
-          assetId = existing.id;
-          if (isToday) {
-            db.prepare(
-              "UPDATE assets SET category = ?, name = ?, value = ?, purchase_date = ?, purchase_price = ?, remark = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            ).run(
-              category,
-              name,
-              value,
-              purchaseDate,
-              purchasePrice,
-              remark,
-              assetId,
-            );
-          }
+        if (existingAsset) {
+          assetId = existingAsset.id;
         }
       }
 
+      // 若无 id 或 id 无效：按 category+name 精确匹配已有资产，避免重复创建，并继承购买信息
       if (!assetId) {
-        // 新资产（或主表中不存在的）：若为今天则插入主表，历史快照也要有 asset_id
-        if (isToday) {
-          const info = db
-            .prepare(
-              "INSERT INTO assets (category, name, value, purchase_date, purchase_price, remark) VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .run(category, name, value, purchaseDate, purchasePrice, remark);
-          assetId = info.lastInsertRowid;
-        } else {
-          // 历史日期：插入一个占位主表记录，保证 asset_id 存在（便于日后关联）
-          const info = db
-            .prepare(
-              "INSERT INTO assets (category, name, value, purchase_date, purchase_price, remark) VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .run(category, name, value, purchaseDate, purchasePrice, remark);
-          assetId = info.lastInsertRowid;
+        existingAsset = db
+          .prepare(
+            "SELECT * FROM assets WHERE category = ? AND name = ? ORDER BY id ASC LIMIT 1",
+          )
+          .get(category, name);
+        if (existingAsset) {
+          assetId = existingAsset.id;
         }
+      }
+
+      // 若表单中 purchase_date / purchase_price 为空，但已有资产有这些字段，则继承
+      if (existingAsset) {
+        if (!purchaseDate && existingAsset.purchase_date) {
+          purchaseDate = existingAsset.purchase_date;
+        }
+        if (
+          purchasePrice === null &&
+          existingAsset.purchase_price !== null &&
+          existingAsset.purchase_price !== undefined &&
+          existingAsset.purchase_price !== ""
+        ) {
+          purchasePrice = Number(existingAsset.purchase_price);
+        }
+      }
+
+      if (assetId) {
+        // 更新已有资产（只有今天才同步更新主表；历史日期仅写入快照历史）
+        if (isToday) {
+          db.prepare(
+            "UPDATE assets SET category = ?, name = ?, value = ?, purchase_date = ?, purchase_price = ?, remark = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+          ).run(
+            category,
+            name,
+            value,
+            purchaseDate,
+            purchasePrice,
+            remark,
+            assetId,
+          );
+        }
+      } else {
+        // 全新资产：插入主表
+        const info = db
+          .prepare(
+            "INSERT INTO assets (category, name, value, purchase_date, purchase_price, remark) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(category, name, value, purchaseDate, purchasePrice, remark);
+        assetId = info.lastInsertRowid;
       }
 
       // 计算 change_amount：相对上一个日期（snapshot_date < date）该资产最后一次快照值
