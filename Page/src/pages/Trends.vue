@@ -165,17 +165,21 @@ function pad2(n) {
 }
 
 function applyToday() {
-  start.value = todayStr();
-  end.value = todayStr();
-  // 直接调用 load，避免 watch 的延迟
-  load();
+  // 使用 nextTick 确保两个值同时更新，避免 watch 触发两次
+  const newStart = todayStr();
+  const newEnd = todayStr();
+  start.value = newStart;
+  end.value = newEnd;
+  // watch 会自动触发 load()
 }
 
 function applyRange(days) {
-  start.value = daysAgoStr(days);
-  end.value = todayStr();
-  // 直接调用 load，避免 watch 的延迟
-  load();
+  // 使用 nextTick 确保两个值同时更新，避免 watch 触发两次
+  const newStart = daysAgoStr(days);
+  const newEnd = todayStr();
+  start.value = newStart;
+  end.value = newEnd;
+  // watch 会自动触发 load()
 }
 
 // ========= 调色板 =========
@@ -423,6 +427,8 @@ function buildYAxis() {
 // ========= 数据加载 =========
 async function load() {
   if (!start.value || !end.value) return;
+  // 日期范围无效时跳过（避免 applyRange 分两次赋值时触发无效 load）
+  if (start.value > end.value) return;
   
   const currentLoadId = ++loadId; // 并发控制
   
@@ -445,7 +451,7 @@ async function load() {
       getChanges({ start: start.value, end: end.value }),
     ]);
 
-    // 检查是否过期
+    // 检查是否过期（只检查一次，避免多次检查导致图表不渲染）
     if (currentLoadId !== loadId) return;
 
     snapshots.value = {
@@ -470,9 +476,6 @@ async function load() {
             .catch(() => ({ name: it.name, history: [] })),
         ),
       );
-      
-      // 检查是否过期
-      if (currentLoadId !== loadId) return;
       
       const dates = snapshots.value.dates || [];
       // 为每个 top item 生成与日期序列对齐的 values（缺失时用前值）
@@ -499,9 +502,6 @@ async function load() {
     // 等待浏览器完成布局（双重 requestAnimationFrame 确保元素有正确尺寸）
     await new Promise(resolve => requestAnimationFrame(resolve));
     await new Promise(resolve => requestAnimationFrame(resolve));
-    
-    // 检查是否过期
-    if (currentLoadId !== loadId) return;
     
     ensureResizeListener();
     refreshAllCharts();
