@@ -38,10 +38,6 @@ function goToday() {
   snapshotDate.value = todayStr();
 }
 
-function pickSnapshotDate(d) {
-  snapshotDate.value = d;
-}
-
 async function loadSnapshotDates() {
   try {
     const res = await listSnapshotDates();
@@ -80,8 +76,6 @@ async function initialLoad() {
   await loadSnapshot();
   isInitialLoading = false;
 }
-
-const recentSnapshotDates = computed(() => (snapshotDates.value || []).slice(0, 5));
 
 function editThisDate() {
   batchVisible.value = true;
@@ -248,18 +242,6 @@ watch(snapshotDate, (val, oldVal) => {
           <button class="btn ghost small nav-btn" :disabled="loading" @click="goNext" title="下一天">▶</button>
           <button class="btn ghost small" :disabled="loading" @click="goToday">今日</button>
 
-          <div v-if="snapshotDates.length > 0" class="quick-dates">
-            <button
-              v-for="d in recentSnapshotDates"
-              :key="d"
-              class="quick-date"
-              :class="{ active: d === snapshotDate }"
-              :disabled="loading"
-              @click="pickSnapshotDate(d)"
-            >
-              {{ formatDate(d) }}
-            </button>
-          </div>
           <button class="btn ghost small" :disabled="loading" @click="loadSnapshot">⟳ 刷新</button>
         </div>
       </div>
@@ -467,37 +449,6 @@ watch(snapshotDate, (val, oldVal) => {
 
 .date-selector .date-picker {
   width: 170px;
-}
-
-.quick-dates {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  padding-left: 6px;
-  margin-left: 2px;
-  border-left: 1px dashed var(--line);
-}
-
-.quick-date {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-  padding: 6px 10px;
-  font-size: 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-family: "JetBrains Mono", monospace;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-}
-.quick-date:hover {
-  border-color: rgba(212, 175, 106, 0.4);
-  color: var(--gold-2);
-}
-.quick-date.active {
-  background: rgba(212, 175, 106, 0.14);
-  border-color: var(--gold);
-  color: var(--gold-2);
 }
 
 .btn {

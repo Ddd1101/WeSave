@@ -69,11 +69,6 @@ async function loadDates() {
   }
 }
 
-const recentSnapshotDates = computed(() => {
-  // 展示最近 5 个快照日期作为快捷按钮
-  return (snapshotDates.value || []).slice(0, 5);
-});
-
 async function loadSnapshot() {
   loading.value = true;
   try {
@@ -101,10 +96,6 @@ function openBatchForm(targetDate) {
   batchInitialDate.value =
     (isValid ? targetDate : null) || selectedDate.value || todayStr();
   batchVisible.value = true;
-}
-
-function editSelectedDate() {
-  openBatchForm(selectedDate.value);
 }
 
 function onBatchSaved(res) {
@@ -269,21 +260,6 @@ onMounted(initialLoad);
           </button>
           <button class="btn ghost small" :disabled="loading" @click="goToday">
             今天
-          </button>
-          <div v-if="snapshotDates.length > 0" class="quick-dates">
-            <button
-              v-for="d in recentSnapshotDates"
-              :key="d"
-              class="quick-date"
-              :class="{ active: d === selectedDate }"
-              :disabled="loading"
-              @click="selectedDate = d"
-            >
-              {{ formatDate(d) }}
-            </button>
-          </div>
-          <button class="btn ghost small" :disabled="loading" @click="editSelectedDate">
-            编辑该日
           </button>
         </div>
       </div>
@@ -536,37 +512,6 @@ onMounted(initialLoad);
 
 .date-selector .date-picker {
   width: 170px;
-}
-
-.quick-dates {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  padding-left: 6px;
-  margin-left: 2px;
-  border-left: 1px dashed var(--line);
-}
-
-.quick-date {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-  padding: 6px 10px;
-  font-size: 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-family: "JetBrains Mono", monospace;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-}
-.quick-date:hover {
-  border-color: rgba(212, 175, 106, 0.4);
-  color: var(--gold-2);
-}
-.quick-date.active {
-  background: rgba(212, 175, 106, 0.14);
-  border-color: var(--gold);
-  color: var(--gold-2);
 }
 
 .nav-btn {
