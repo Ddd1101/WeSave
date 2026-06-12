@@ -91,26 +91,34 @@ function recordHistory({
 }
 
 // 计算截止某日期的资产快照
+// 对每个 asset_id，取 <= dateStr 的最后一条 snapshot_date 的记录
+// 如果当天/之前无 snapshot 记录，再从最新的 create/update 记录中取最后一次的值（确保空区间也能显示当前资产价值）
 function snapshotAt(dateStr) {
-  // 对每个 asset_id，取 <= dateStr 当天 23:59:59 的最后一条记录
-  // 如果当天无记录，往前找最近一次；如果最后状态是 delete 则剔除
-  const upper = `${dateStr} 23:59:59`;
   const rows = db
     .prepare(
       `
       SELECT h.*
       FROM asset_history h
       INNER JOIN (
-        SELECT asset_id, MAX(recorded_at) AS max_at
+        SELECT asset_id,
+               COALESCE(
+                 MAX(CASE WHEN action = 'snapshot' AND snapshot_date <= ? THEN snapshot_date END),
+                 MAX(CASE WHEN action IN ('create','update') AND recorded_at <= ? THEN recorded_at END)
+               ) AS key_date
         FROM asset_history
-        WHERE recorded_at <= ?
         GROUP BY asset_id
-      ) m ON h.asset_id = m.asset_id AND h.recorded_at = m.max_at
+      ) m
+        ON h.asset_id = m.asset_id
+        AND m.key_date IS NOT NULL
+        AND (
+             (h.action = 'snapshot' AND h.snapshot_date = m.key_date)
+          OR (h.action IN ('create','update') AND h.recorded_at = m.key_date)
+        )
       WHERE h.action != 'delete'
-      ORDER BY h.recorded_at DESC
+      ORDER BY h.id ASC
       `,
     )
-    .all(upper);
+    .all(dateStr, dateStr);
   return rows;
 }
 
@@ -552,20 +560,24 @@ router.get("/:id/history", (req, res) => {
   const start = parseDate(req.query.start);
   const end = parseDate(req.query.end);
   let rows;
+  // 仅返回 snapshot 类型的历史，用于细项走势；避免 create/update/delete 混入
+  const baseSql =
+    "SELECT asset_id, snapshot_date, value FROM asset_history WHERE asset_id = ? AND action = 'snapshot'";
   if (start && end) {
     rows = db
       .prepare(
-        `SELECT * FROM asset_history WHERE asset_id = ? AND snapshot_date BETWEEN ? AND ? ORDER BY recorded_at ASC`,
+        `${baseSql} AND snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date ASC`,
       )
       .all(id, start, end);
   } else {
-    rows = db
-      .prepare(
-        `SELECT * FROM asset_history WHERE asset_id = ? ORDER BY recorded_at ASC`,
-      )
-      .all(id);
+    rows = db.prepare(`${baseSql} ORDER BY snapshot_date ASC`).all(id);
   }
-  res.json({ id, history: rows });
+  const history = rows.map((r) => ({
+    asset_id: r.asset_id,
+    snapshot_date: r.snapshot_date,
+    value: Number(r.value),
+  }));
+  res.json({ id, history });
 });
 
 router.get("/changes", (req, res) => {
@@ -573,9 +585,10 @@ router.get("/changes", (req, res) => {
   const end = parseDate(req.query.end) || todayStr();
   if (!start)
     return res.status(400).json({ error: "start 参数必须是 YYYY-MM-DD" });
+  // 只统计快照动作的变化；create/update/delete 的变化量意义不同（且会重复计入）
   const rows = db
     .prepare(
-      `SELECT * FROM asset_history WHERE snapshot_date BETWEEN ? AND ? ORDER BY recorded_at ASC`,
+      `SELECT * FROM asset_history WHERE action = 'snapshot' AND snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date ASC`,
     )
     .all(start, end);
 
@@ -584,10 +597,21 @@ router.get("/changes", (req, res) => {
   const byItemMap = new Map();
   for (const r of rows) {
     const ch = Number(r.change_amount || 0);
+    if (ch === 0) continue;
     const d = r.snapshot_date;
     dailyMap.set(d, (dailyMap.get(d) || 0) + ch);
     byCatMap.set(r.category, (byCatMap.get(r.category) || 0) + ch);
-    byItemMap.set(r.name, (byItemMap.get(r.name) || 0) + ch);
+    const key = String(r.asset_id || r.name);
+    const existing = byItemMap.get(key);
+    if (existing) {
+      existing.change += ch;
+    } else {
+      byItemMap.set(key, {
+        id: r.asset_id || null,
+        name: r.name,
+        change: ch,
+      });
+    }
   }
   const daily = [...dailyMap.entries()]
     .map(([date, change]) => ({ date, change }))
@@ -597,12 +621,143 @@ router.get("/changes", (req, res) => {
     .map(([category, change]) => ({ category, change }))
     .sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
 
-  const top_items = [...byItemMap.entries()]
-    .map(([name, change]) => ({ name, change }))
+  const top_items = [...byItemMap.values()]
     .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
     .slice(0, 10);
 
   res.json({ daily, by_category, top_items });
+});
+
+// 生成以今天为基准的前后 N 天模拟快照数据
+router.post("/generate-mock", (req, res) => {
+  const daysBefore = Math.min(
+    180,
+    Math.max(1, Number(req.query.days_before || req.body?.days_before || 30)),
+  );
+  const daysAfter = Math.min(
+    180,
+    Math.max(0, Number(req.query.days_after || req.body?.days_after || 30)),
+  );
+  const force =
+    String(req.query.force || req.body?.force || "false").toLowerCase() ===
+    "true";
+
+  const assets = db.prepare("SELECT * FROM assets ORDER BY id ASC").all();
+  if (assets.length === 0) {
+    return res.status(400).json({ error: "请先创建资产条目后再生成模拟数据" });
+  }
+
+  const today = todayStr();
+
+  function pad2(n) {
+    return String(n).padStart(2, "0");
+  }
+  function shiftDate(dateStr, delta) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() + delta);
+    return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(
+      dt.getDate(),
+    )}`;
+  }
+  function seededRandom(seed) {
+    let s = 0;
+    for (let i = 0; i < seed.length; i++) {
+      s = (s * 31 + seed.charCodeAt(i)) >>> 0;
+    }
+    let x = s || 1;
+    return function () {
+      x = (x * 1664525 + 1013904223) >>> 0;
+      return x / 0x100000000;
+    };
+  }
+  function categoryDrift(name) {
+    const map = {
+      存款: 0.002,
+      投资资产: 0.012,
+      其他资产: 0.004,
+      外部借款: 0.002,
+    };
+    return map[name] || 0.005;
+  }
+
+  // 找出已存在的 snapshot 日期
+  const existingRows = db
+    .prepare(
+      "SELECT DISTINCT snapshot_date AS d FROM asset_history WHERE action = 'snapshot'",
+    )
+    .all();
+  const existingDates = new Set(existingRows.map((r) => r.d));
+
+  const insertStmt = db.prepare(`
+    INSERT INTO asset_history
+      (asset_id, action, snapshot_date, category, name, value, purchase_date, purchase_price, remark, change_amount)
+    VALUES (?, 'snapshot', ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  let inserted = 0;
+  let skipped = 0;
+
+  try {
+    db.exec("BEGIN");
+    for (let offset = -daysBefore; offset <= daysAfter; offset++) {
+      const date = shiftDate(today, offset);
+      if (existingDates.has(date) && !force) {
+        skipped++;
+        continue;
+      }
+
+      const prevDate = shiftDate(date, -1);
+      const prevRows = db
+        .prepare(
+          "SELECT asset_id, value FROM asset_history WHERE snapshot_date = ? AND action = 'snapshot'",
+        )
+        .all(prevDate);
+      const prevValues = {};
+      prevRows.forEach((r) => (prevValues[r.asset_id] = Number(r.value || 0)));
+
+      for (const a of assets) {
+        const rnd = seededRandom(date + "|" + a.id + "|" + a.name);
+        const base = Number(a.value || 0);
+        const driftPerDay = categoryDrift(a.category) || 0.005;
+        const driftDays = Math.abs(offset);
+        const range = driftPerDay * Math.max(1, driftDays);
+        const noise = (rnd() - 0.5) * 2;
+        let newValue = base + base * range * noise;
+        if (base < 0 && newValue > 0) newValue = base * 0.95;
+        newValue = Math.round(newValue * 100) / 100;
+        const changeAmount =
+          prevValues[a.id] != null ? newValue - prevValues[a.id] : null;
+        insertStmt.run(
+          a.id,
+          date,
+          a.category,
+          a.name,
+          newValue,
+          a.purchase_date || null,
+          a.purchase_price != null ? a.purchase_price : null,
+          a.remark || null,
+          changeAmount,
+        );
+      }
+      inserted++;
+    }
+    db.exec("COMMIT");
+    res.json({
+      ok: true,
+      today,
+      days_before: daysBefore,
+      days_after: daysAfter,
+      inserted,
+      skipped,
+    });
+  } catch (e) {
+    try {
+      db.exec("ROLLBACK");
+    } catch (_) {}
+    console.error("[generate-mock]", e);
+    res.status(500).json({ error: e.message || "生成失败" });
+  }
 });
 
 // 原有 get by id —— 必须放在最后以避免与 /snapshot /snapshots 等冲突

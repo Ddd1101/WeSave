@@ -93,7 +93,7 @@ const seed = [
   },
   { category: "投资资产", name: "投资黄金", value: 59416.22, remark: "59g" },
   { category: "其他资产", name: "黄金首饰", value: 59820, remark: "60g" },
-  { category: "其他资产", name: "外部借款", value: -400000, remark: null },
+  { category: "外部借款", name: "外部借款", value: -400000, remark: null },
 ];
 
 const insertAsset = db.prepare(

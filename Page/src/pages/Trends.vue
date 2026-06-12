@@ -1,176 +1,228 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
-import { getSnapshots, getChanges, getAssetHistory } from '../api/assets.js';
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
+import { getSnapshots, getChanges, getAssetHistory, generateMock } from '../api/assets.js';
 import {
-  formatCurrency,
   formatSignedCurrency,
   formatSignedPercent,
-  formatDate,
+  formatCurrency,
   todayStr,
   daysAgoStr,
 } from '../utils/format.js';
-import { useChart } from '../utils/useChart.js';
+import * as echarts from 'echarts/core';
+import { BarChart, LineChart, PieChart, RadarChart } from 'echarts/charts';
+import {
+  TitleComponent,
+  TooltipComponent,
+  LegendComponent,
+  GridComponent,
+  DatasetComponent,
+  ToolboxComponent,
+} from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
 
+try {
+  echarts.use([
+    BarChart,
+    LineChart,
+    PieChart,
+    RadarChart,
+    TitleComponent,
+    TooltipComponent,
+    LegendComponent,
+    GridComponent,
+    DatasetComponent,
+    ToolboxComponent,
+    CanvasRenderer,
+  ]);
+} catch (err) {
+  // 防止某些子组件注册失败中断整个脚本
+  console.warn('[Trends] echarts.use failed:', err);
+}
+
+// ========= 状态 =========
 const start = ref(daysAgoStr(30));
 const end = ref(todayStr());
 const granularity = ref('day');
-const chartMode = ref('total'); // total(净资产) / category(分类叠加) / items(细项资产)
 const loading = ref(false);
-
-const trend = ref({ dates: [], totals: [], by_category: [] });
-const changes = ref({ daily: [], by_category: [], top_items: [] });
-const itemHistories = ref([]); // [{ name, values }] 并行数组，与 trend.dates 对齐
 let isInitialLoading = true;
+let loadId = 0; // 并发控制：每次 load 递增，过期的 load 不再更新状态
+let loadDebounceTimer = null; // 防抖定时器
 
+const snapshots = ref({ dates: [], totals: [], by_category: [] });
+const changes = ref({ daily: [], by_category: [], top_items: [] });
+const itemHistories = ref([]); // [{ name, values }] 与 snapshots.dates 对齐
+
+// ========= 手动 echarts 管理（不依赖 useChart） =========
+// 直接用真实 DOM ref，配合 nextTick 在视图渲染后再 init。
+const lineEl = ref(null);
+const stackEl = ref(null);
+const changeEl = ref(null);
+const radarEl = ref(null);
+const itemsEl = ref(null);
+
+function ensureChart(refEl, instanceRef) {
+  if (instanceRef.value) return instanceRef.value;
+  if (!refEl.value) return null;
+  try {
+    const inst = echarts.init(refEl.value, null, { renderer: 'canvas' });
+    instanceRef.value = inst;
+    return inst;
+  } catch (err) {
+    console.error('[Trends] echarts.init failed:', err);
+    return null;
+  }
+}
+
+const lineHolder = { value: null };
+const stackHolder = { value: null };
+const changeHolder = { value: null };
+const radarHolder = { value: null };
+const itemsHolder = { value: null };
+
+function refreshLineChart() {
+  requestAnimationFrame(() => {
+    const inst = ensureChart(lineEl, lineHolder);
+    if (!inst) return;
+    inst.setOption(lineOption(), true);
+    try { inst.resize(); } catch (_) {}
+  });
+}
+function refreshStackChart() {
+  requestAnimationFrame(() => {
+    const inst = ensureChart(stackEl, stackHolder);
+    if (!inst) return;
+    inst.setOption(stackOption(), true);
+    try { inst.resize(); } catch (_) {}
+  });
+}
+function refreshChangeChart() {
+  requestAnimationFrame(() => {
+    const inst = ensureChart(changeEl, changeHolder);
+    if (!inst) return;
+    if (!hasData.value) { inst.clear(); return; }
+    inst.setOption(changeBarOption(), true);
+    try { inst.resize(); } catch (_) {}
+  });
+}
+function refreshRadarChart() {
+  requestAnimationFrame(() => {
+    const inst = ensureChart(radarEl, radarHolder);
+    if (!inst) return;
+    const opt = radarOption();
+    if (!opt || !opt.radar) { inst.clear(); return; }
+    inst.setOption(opt, true);
+    try { inst.resize(); } catch (_) {}
+  });
+}
+function refreshItemsChart() {
+  requestAnimationFrame(() => {
+    const inst = ensureChart(itemsEl, itemsHolder);
+    if (!inst) return;
+    const opt = itemsOption();
+    if (!opt || !opt.series || opt.series.length === 0) { inst.clear(); return; }
+    inst.setOption(opt, true);
+    try { inst.resize(); } catch (_) {}
+  });
+}
+
+function refreshAllCharts() {
+  refreshLineChart();
+  refreshStackChart();
+  refreshChangeChart();
+  refreshRadarChart();
+  refreshItemsChart();
+}
+
+onBeforeUnmount(() => {
+  [lineHolder, stackHolder, changeHolder, radarHolder, itemsHolder].forEach((h) => {
+    if (h.value) {
+      try { h.value.dispose(); } catch (_) {}
+      h.value = null;
+    }
+  });
+  if (resizeHandler) {
+    window.removeEventListener('resize', resizeHandler);
+    resizeHandler = null;
+  }
+});
+
+let resizeHandler = null;
+function ensureResizeListener() {
+  if (resizeHandler) return;
+  resizeHandler = () => {
+    [lineHolder, stackHolder, changeHolder, radarHolder, itemsHolder].forEach((h) => {
+      if (h.value) {
+        try { h.value.resize(); } catch (_) {}
+      }
+    });
+  };
+  window.addEventListener('resize', resizeHandler);
+}
+
+// ========= 快捷工具 =========
 function pad2(n) {
   return String(n).padStart(2, '0');
 }
 
 function applyToday() {
+  start.value = todayStr();
   end.value = todayStr();
+  // 直接调用 load，避免 watch 的延迟
+  load();
 }
 
 function applyRange(days) {
   start.value = daysAgoStr(days);
   end.value = todayStr();
+  // 直接调用 load，避免 watch 的延迟
+  load();
 }
 
-async function load() {
-  if (!start.value || !end.value) return;
-  loading.value = true;
-  try {
-    const [t, c] = await Promise.all([
-      getSnapshots({
-        start: start.value,
-        end: end.value,
-        granularity: granularity.value,
-      }),
-      getChanges({ start: start.value, end: end.value }),
-    ]);
-    trend.value = t;
-    changes.value = c;
-
-    // 更细粒度：拉取 top 变动项各自的历史，用于"细项资产"走势图
-    const topItems = (changes.value && changes.value.top_items) || [];
-    const list = topItems.slice(0, 6);
-    if (list.length > 0) {
-      const histories = await Promise.all(
-        list.map((it) =>
-          getAssetHistory(it.id, { start: start.value, end: end.value })
-            .then((r) => ({ name: it.name, history: (r && r.history) || [] }))
-            .catch(() => ({ name: it.name, history: [] }))
-        )
-      );
-      const dates = (trend.value && trend.value.dates) || [];
-      itemHistories.value = histories.map((h) => {
-        const map = {};
-        (h.history || []).forEach((pt) => {
-          if (pt && pt.snapshot_date) map[pt.snapshot_date] = Number(pt.value || 0);
-        });
-        let last = null;
-        const values = dates.map((d) => {
-          if (d in map) last = map[d];
-          return last;
-        });
-        return { name: h.name, values };
-      });
-    } else {
-      itemHistories.value = [];
-    }
-
-    refreshAll();
-    itemsChart.refresh();
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function initialLoad() {
-  isInitialLoading = true;
-  await load();
-  isInitialLoading = false;
-}
-
-const netChange = computed(() => {
-  const arr = trend.value.totals;
-  if (!arr || arr.length < 2) return 0;
-  return arr[arr.length - 1] - arr[0];
-});
-
-const netChangePercent = computed(() => {
-  const arr = trend.value.totals;
-  if (!arr || arr.length < 2 || !arr[0]) return 0;
-  return (netChange.value / Math.abs(arr[0])) * 100;
-});
-
-const maxAbsChange = computed(() => {
-  const list = (changes.value && changes.value.by_category) || [];
-  let m = 0;
-  for (const c of list) m = Math.max(m, Math.abs(Number(c.change || 0)));
-  return m;
-});
-
-// 调色板
+// ========= 调色板 =========
 const palette = ['#d4af6a', '#4fd1a5', '#7aa6ff', '#ffb48a', '#c488ff', '#85e3ff'];
 
-// 净资产趋势折线图
-const lineOption = () => ({
-  tooltip: {
-    trigger: 'axis',
-    valueFormatter: (v) => formatCurrency(v),
-    backgroundColor: 'rgba(12,16,28,0.94)',
-    borderColor: 'rgba(212,175,106,0.35)',
-    borderWidth: 1,
-    textStyle: { color: '#e9ecf5', fontFamily: 'JetBrains Mono, monospace', fontSize: 12 },
-    axisPointer: { type: 'line', lineStyle: { color: 'rgba(212,175,106,0.4)' } },
-  },
-  grid: { left: 70, right: 30, top: 30, bottom: 50 },
-  xAxis: {
-    type: 'category',
-    data: trend.value.dates,
-    boundaryGap: false,
-    axisLabel: { color: '#8a93ad', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
-    axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
-    axisTick: { show: false },
-  },
-  yAxis: {
-    type: 'value',
-    axisLabel: {
-      color: '#8a93ad',
-      fontFamily: 'JetBrains Mono, monospace',
-      fontSize: 11,
-      formatter: (v) => {
-        if (Math.abs(v) >= 10000) return (v / 10000).toFixed(1) + '万';
-        return v;
-      },
+// ========= 图表配置 =========
+const lineOption = () => {
+  const dates = snapshots.value.dates || [];
+  const totals = snapshots.value.totals || [];
+  return {
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (v) => formatCurrency(v),
+      backgroundColor: 'rgba(12,16,28,0.94)',
+      borderColor: 'rgba(212,175,106,0.35)',
+      borderWidth: 1,
+      textStyle: { color: '#e9ecf5', fontFamily: 'JetBrains Mono, monospace', fontSize: 12 },
     },
-    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
-  },
-  series: [
-    {
-      name: '净资产',
-      type: 'line',
-      smooth: true,
-      showSymbol: false,
-      lineStyle: { width: 3, color: '#d4af6a', shadowBlur: 10, shadowColor: 'rgba(212,175,106,0.5)' },
-      areaStyle: {
-        color: {
-          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-          colorStops: [
-            { offset: 0, color: 'rgba(212,175,106,0.45)' },
-            { offset: 1, color: 'rgba(212,175,106,0)' },
-          ],
+    grid: { left: 70, right: 30, top: 30, bottom: 50 },
+    xAxis: buildXAxis(dates),
+    yAxis: buildYAxis(),
+    series: [
+      {
+        name: '净资产',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { width: 3, color: '#d4af6a', shadowBlur: 10, shadowColor: 'rgba(212,175,106,0.5)' },
+        areaStyle: {
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(212,175,106,0.45)' },
+              { offset: 1, color: 'rgba(212,175,106,0)' },
+            ],
+          },
         },
+        data: totals,
+        animationDuration: 800,
       },
-      data: trend.value.totals,
-      animationDuration: 1000,
-    },
-  ],
-});
+    ],
+  };
+};
 
-// 堆叠面积图
 const stackOption = () => {
-  const cats = trend.value.by_category || [];
+  const dates = snapshots.value.dates || [];
+  const cats = snapshots.value.by_category || [];
   const series = cats.map((c, i) => ({
     name: c.category,
     type: 'line',
@@ -209,33 +261,13 @@ const stackOption = () => {
       itemHeight: 8,
     },
     grid: { left: 70, right: 30, top: 50, bottom: 50 },
-    xAxis: {
-      type: 'category',
-      data: trend.value.dates,
-      boundaryGap: false,
-      axisLabel: { color: '#8a93ad', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
-      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
-      axisTick: { show: false },
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        color: '#8a93ad',
-        fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 11,
-        formatter: (v) => {
-          if (Math.abs(v) >= 10000) return (v / 10000).toFixed(1) + '万';
-          return v;
-        },
-      },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
-    },
+    xAxis: buildXAxis(dates),
+    yAxis: buildYAxis(),
     series,
-    animationDuration: 1000,
+    animationDuration: 800,
   };
 };
 
-// 每日变化柱状图
 const changeBarOption = () => {
   const daily = changes.value.daily || [];
   return {
@@ -260,19 +292,7 @@ const changeBarOption = () => {
       axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
       axisTick: { show: false },
     },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        color: '#8a93ad',
-        fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 11,
-        formatter: (v) => {
-          if (Math.abs(v) >= 10000) return (v / 10000).toFixed(1) + '万';
-          return v;
-        },
-      },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
-    },
+    yAxis: buildYAxis(),
     series: [
       {
         type: 'bar',
@@ -292,15 +312,14 @@ const changeBarOption = () => {
             borderRadius: [4, 4, 0, 0],
           },
         })),
-        animationDuration: 900,
+        animationDuration: 700,
       },
     ],
   };
 };
 
-// 雷达图
 const radarOption = () => {
-  const by = trend.value.by_category || [];
+  const by = snapshots.value.by_category || [];
   if (by.length === 0) return {};
   const max = Math.max(...by.map((c) => Math.max(...c.values, 0))) * 1.15 || 1;
   return {
@@ -340,9 +359,8 @@ const radarOption = () => {
   };
 };
 
-// 细项资产折线图（更细粒度的走势图）
 const itemsOption = () => {
-  const dates = (trend.value && trend.value.dates) || [];
+  const dates = snapshots.value.dates || [];
   const items = itemHistories.value || [];
   const palette2 = ['#7aa6ff', '#ffb48a', '#c488ff', '#85e3ff', '#d4af6a', '#4fd1a5'];
   return {
@@ -359,28 +377,8 @@ const itemsOption = () => {
       itemGap: 14,
     },
     grid: { left: 70, right: 30, top: 50, bottom: 50 },
-    xAxis: {
-      type: 'category',
-      data: dates,
-      boundaryGap: false,
-      axisLabel: { color: '#8a93ad', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
-      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
-      axisTick: { show: false },
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        color: '#8a93ad',
-        fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 11,
-        formatter: (v) => {
-          if (v === 0) return '0';
-          if (Math.abs(v) >= 10000) return (v / 10000).toFixed(1) + '万';
-          return v;
-        },
-      },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
-    },
+    xAxis: buildXAxis(dates),
+    yAxis: buildYAxis(),
     series: items.map((h, i) => ({
       name: h.name,
       type: 'line',
@@ -395,18 +393,163 @@ const itemsOption = () => {
   };
 };
 
-const lineChart = useChart(lineOption);
-const stackChart = useChart(stackOption);
-const changeChart = useChart(changeBarOption);
-const radarChart = useChart(radarOption);
-const itemsChart = useChart(itemsOption);
-
-function refreshAll() {
-  lineChart.refresh();
-  stackChart.refresh();
-  changeChart.refresh();
-  radarChart.refresh();
+function buildXAxis(dates) {
+  return {
+    type: 'category',
+    data: dates,
+    boundaryGap: false,
+    axisLabel: { color: '#8a93ad', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
+    axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
+    axisTick: { show: false },
+  };
 }
+
+function buildYAxis() {
+  return {
+    type: 'value',
+    axisLabel: {
+      color: '#8a93ad',
+      fontFamily: 'JetBrains Mono, monospace',
+      fontSize: 11,
+      formatter: (v) => {
+        if (Math.abs(v) >= 10000) return (v / 10000).toFixed(1) + '万';
+        return v;
+      },
+    },
+    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
+  };
+}
+
+// ========= 数据加载 =========
+async function load() {
+  if (!start.value || !end.value) return;
+  
+  const currentLoadId = ++loadId; // 并发控制
+  
+  // 先 dispose 旧的图表实例（因为 loading=true 会移除 DOM）
+  [lineHolder, stackHolder, changeHolder, radarHolder, itemsHolder].forEach((h) => {
+    if (h.value) {
+      try { h.value.dispose(); } catch (_) {}
+      h.value = null;
+    }
+  });
+  
+  loading.value = true;
+  try {
+    const [snap, chg] = await Promise.all([
+      getSnapshots({
+        start: start.value,
+        end: end.value,
+        granularity: granularity.value,
+      }),
+      getChanges({ start: start.value, end: end.value }),
+    ]);
+
+    // 检查是否过期
+    if (currentLoadId !== loadId) return;
+
+    snapshots.value = {
+      dates: snap.dates || [],
+      totals: snap.totals || [],
+      by_category: snap.by_category || [],
+    };
+    changes.value = {
+      daily: chg.daily || [],
+      by_category: chg.by_category || [],
+      top_items: chg.top_items || [],
+    };
+
+    // 拉取 top 变动项各自的历史
+    const topItems = changes.value.top_items || [];
+    const list = topItems.filter((it) => it.id != null).slice(0, 6);
+    if (list.length > 0) {
+      const histories = await Promise.all(
+        list.map((it) =>
+          getAssetHistory(it.id, { start: start.value, end: end.value })
+            .then((r) => ({ name: it.name, history: (r && r.history) || [] }))
+            .catch(() => ({ name: it.name, history: [] })),
+        ),
+      );
+      
+      // 检查是否过期
+      if (currentLoadId !== loadId) return;
+      
+      const dates = snapshots.value.dates || [];
+      // 为每个 top item 生成与日期序列对齐的 values（缺失时用前值）
+      itemHistories.value = histories.map((h) => {
+        const map = new Map();
+        (h.history || []).forEach((pt) => {
+          if (pt && pt.snapshot_date) map.set(pt.snapshot_date, Number(pt.value || 0));
+        });
+        let last = null;
+        const values = dates.map((d) => {
+          if (map.has(d)) last = map.get(d);
+          return last;
+        });
+        return { name: h.name, values };
+      });
+    } else {
+      itemHistories.value = [];
+    }
+
+    // 先结束 loading 状态，让图表容器渲染到 DOM 中
+    loading.value = false;
+    // 等待 DOM 更新
+    await nextTick();
+    // 等待浏览器完成布局（双重 requestAnimationFrame 确保元素有正确尺寸）
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    
+    // 检查是否过期
+    if (currentLoadId !== loadId) return;
+    
+    ensureResizeListener();
+    refreshAllCharts();
+  } catch (err) {
+    console.error('[Trends] load failed', err);
+    if (currentLoadId === loadId) {
+      loading.value = false;
+    }
+  }
+}
+
+async function handleGenerateMock() {
+  if (loading.value) return;
+  loading.value = true;
+  try {
+    await generateMock({ days_before: 30, days_after: 30, force: false });
+    await load();
+  } catch (err) {
+    console.error('[Trends] generateMock failed', err);
+  } finally {
+    loading.value = false;
+  }
+}
+
+// ========= 派生数据 =========
+const netChange = computed(() => {
+  const arr = snapshots.value.totals;
+  if (!arr || arr.length < 2) return 0;
+  return arr[arr.length - 1] - arr[0];
+});
+
+const netChangePercent = computed(() => {
+  const arr = snapshots.value.totals;
+  if (!arr || arr.length < 2 || !arr[0]) return 0;
+  return (netChange.value / Math.abs(arr[0])) * 100;
+});
+
+const maxAbsChange = computed(() => {
+  const list = (changes.value && changes.value.by_category) || [];
+  let m = 0;
+  for (const c of list) m = Math.max(m, Math.abs(Number(c.change || 0)));
+  return m;
+});
+
+const hasData = computed(() => {
+  const t = snapshots.value.totals || [];
+  return t.some((v) => v !== 0 && v != null);
+});
 
 const quickRanges = [
   { label: '近7天', days: 7 },
@@ -415,11 +558,16 @@ const quickRanges = [
   { label: '近180天', days: 180 },
 ];
 
-onMounted(initialLoad);
-watch([start, end, granularity], (vals, oldVals) => {
+// ========= 生命周期 & 监听 =========
+onMounted(async () => {
+  isInitialLoading = true;
+  await load();
+  isInitialLoading = false;
+});
+
+watch([start, end, granularity], async () => {
   if (isInitialLoading) return;
-  const changed = vals.some((v, i) => v !== oldVals[i]);
-  if (changed) load();
+  await load();
 });
 </script>
 
@@ -451,7 +599,7 @@ watch([start, end, granularity], (vals, oldVals) => {
           class="date-picker"
         />
 
-        <span class="field-label" style="margin-left:10px;">粒度</span>
+        <span class="field-label" style="margin-left: 10px">粒度</span>
         <div class="seg-wrap">
           <button
             class="seg-item"
@@ -475,11 +623,7 @@ watch([start, end, granularity], (vals, oldVals) => {
 
         <div class="divider" />
 
-        <button
-          class="btn ghost small"
-          :disabled="loading"
-          @click="applyToday"
-        >今日</button>
+        <button class="btn ghost small" :disabled="loading" @click="applyToday">今日</button>
         <button
           v-for="r in quickRanges"
           :key="r.days"
@@ -491,6 +635,10 @@ watch([start, end, granularity], (vals, oldVals) => {
         <button class="btn primary small" :disabled="loading" @click="load">
           <span class="btn-icon">⟳</span>
           <span>刷新</span>
+        </button>
+        <button class="btn ghost small" :disabled="loading" @click="handleGenerateMock">
+          <span class="btn-icon">+</span>
+          <span>生成模拟数据</span>
         </button>
       </div>
 
@@ -511,20 +659,20 @@ watch([start, end, granularity], (vals, oldVals) => {
     <template v-else>
       <!-- 图表区 -->
       <section class="charts-grid">
-        <div class="chart-card span-2">
+        <div class="chart-card">
           <div class="chart-head">
             <span class="chart-title">净资产趋势</span>
             <span class="chart-desc">面积折线图 · 日期序列</span>
           </div>
-          <div class="chart-inner" :ref="lineChart.el" />
+          <div class="chart-inner" ref="lineEl" />
         </div>
 
-        <div class="chart-card span-2">
+        <div class="chart-card">
           <div class="chart-head">
             <span class="chart-title">分类资产价值</span>
             <span class="chart-desc">堆叠面积 · 按分类叠加</span>
           </div>
-          <div class="chart-inner" :ref="stackChart.el" />
+          <div class="chart-inner" ref="stackEl" />
         </div>
 
         <div class="chart-card">
@@ -532,7 +680,14 @@ watch([start, end, granularity], (vals, oldVals) => {
             <span class="chart-title">每日净变化</span>
             <span class="chart-desc">柱状图 · 正/负分色</span>
           </div>
-          <div class="chart-inner" :ref="changeChart.el" />
+          <div
+            v-if="!hasData"
+            class="chart-empty"
+          >
+            <div class="empty-glyph">◇</div>
+            <div>暂无变化数据</div>
+          </div>
+          <div class="chart-inner" ref="changeEl" v-show="hasData" />
         </div>
 
         <div class="chart-card">
@@ -540,7 +695,14 @@ watch([start, end, granularity], (vals, oldVals) => {
             <span class="chart-title">期末分类构成</span>
             <span class="chart-desc">雷达图 · 相对规模</span>
           </div>
-          <div class="chart-inner" :ref="radarChart.el" />
+          <div
+            v-if="!hasData"
+            class="chart-empty"
+          >
+            <div class="empty-glyph">◇</div>
+            <div>暂无分类数据</div>
+          </div>
+          <div class="chart-inner" ref="radarEl" v-show="hasData" />
         </div>
 
         <div class="chart-card span-2">
@@ -548,11 +710,14 @@ watch([start, end, granularity], (vals, oldVals) => {
             <span class="chart-title">细项资产走势</span>
             <span class="chart-desc">Top 变动项 · 逐日期价值</span>
           </div>
-          <div v-if="itemHistories.length === 0" class="chart-empty">
+          <div
+            v-if="itemHistories.length === 0"
+            class="chart-empty"
+          >
             <div class="empty-glyph">◇</div>
             <div>暂无细项数据</div>
           </div>
-          <div class="chart-inner" :ref="itemsChart.el" v-show="itemHistories.length > 0" />
+          <div class="chart-inner" ref="itemsEl" v-show="itemHistories.length > 0" />
         </div>
       </section>
 
@@ -600,7 +765,7 @@ watch([start, end, granularity], (vals, oldVals) => {
           <div v-else class="item-list">
             <div
               v-for="(item, idx) in changes.top_items"
-              :key="item.name"
+              :key="item.id || item.name"
               class="item-row"
             >
               <span class="rank">{{ String(idx + 1).padStart(2, '0') }}</span>
@@ -628,7 +793,7 @@ watch([start, end, granularity], (vals, oldVals) => {
             <div class="col align-right">变化率</div>
           </div>
           <div
-            v-for="c in (trend.by_category || [])"
+            v-for="c in (snapshots.by_category || [])"
             :key="c.category"
             class="summary-row"
           >
@@ -700,16 +865,6 @@ watch([start, end, granularity], (vals, oldVals) => {
   letter-spacing: 2px;
   color: var(--ink-2);
   text-transform: uppercase;
-}
-
-.date-selector {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding-left: 14px;
-  margin-left: 6px;
-  border-left: 1px solid var(--line);
-  flex-wrap: wrap;
 }
 
 .date-picker {
@@ -960,7 +1115,7 @@ watch([start, end, granularity], (vals, oldVals) => {
   color: var(--gold-2);
   background: rgba(212, 175, 106, 0.1);
   font-weight: 500;
-  font-family: 'Inter, sans-serif';
+  font-family: 'Inter', sans-serif;
 }
 
 /* Empty / loading */

@@ -15,6 +15,18 @@ import {
   todayStr,
 } from "../utils/format.js";
 
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function shiftDate(dateStr, delta) {
+  if (!dateStr) return todayStr();
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+
 const snapshotDates = ref([]);
 const selectedDate = ref(todayStr());
 const snapshot = ref({ assets: [], total: 0, by_category: [] });
@@ -22,6 +34,16 @@ const loading = ref(false);
 const keyword = ref("");
 const categoryFilter = ref("");
 const sortKey = ref("value_desc"); // value_desc | value_asc | name | cat | date | price
+
+function goPrevDay() {
+  selectedDate.value = shiftDate(selectedDate.value, -1);
+}
+function goNextDay() {
+  selectedDate.value = shiftDate(selectedDate.value, 1);
+}
+function goToday() {
+  selectedDate.value = todayStr();
+}
 
 // 单项编辑/删除
 const formVisible = ref(false);
@@ -229,6 +251,9 @@ onMounted(initialLoad);
 
         <div class="date-selector">
           <span class="field-label">按日期查看</span>
+          <button class="nav-btn" :disabled="loading" @click="goPrevDay" title="前一天">
+            ‹
+          </button>
           <el-date-picker
             v-model="selectedDate"
             type="date"
@@ -239,18 +264,25 @@ onMounted(initialLoad);
             clearable
             class="date-picker"
           />
+          <button class="nav-btn" :disabled="loading" @click="goNextDay" title="后一天">
+            ›
+          </button>
+          <button class="btn ghost small" :disabled="loading" @click="goToday">
+            今天
+          </button>
           <div v-if="snapshotDates.length > 0" class="quick-dates">
             <button
               v-for="d in recentSnapshotDates"
               :key="d"
               class="quick-date"
               :class="{ active: d === selectedDate }"
+              :disabled="loading"
               @click="selectedDate = d"
             >
               {{ formatDate(d) }}
             </button>
           </div>
-          <button class="btn ghost small" @click="editSelectedDate">
+          <button class="btn ghost small" :disabled="loading" @click="editSelectedDate">
             编辑该日
           </button>
         </div>
@@ -535,6 +567,32 @@ onMounted(initialLoad);
   background: rgba(212, 175, 106, 0.14);
   border-color: var(--gold);
   color: var(--gold-2);
+}
+
+.nav-btn {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+  color: var(--ink-1);
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 18px;
+  font-family: "JetBrains Mono", monospace;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.nav-btn:hover:not(:disabled) {
+  border-color: rgba(212, 175, 106, 0.4);
+  color: var(--gold-2);
+  background: rgba(212, 175, 106, 0.08);
+}
+.nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .btn {

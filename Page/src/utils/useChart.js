@@ -7,25 +7,27 @@ import {
   LegendComponent,
   GridComponent,
   DatasetComponent,
-  TransformComponent,
   ToolboxComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
-echarts.use([
-  BarChart,
-  LineChart,
-  PieChart,
-  RadarChart,
-  TitleComponent,
-  TooltipComponent,
-  LegendComponent,
-  GridComponent,
-  DatasetComponent,
-  TransformComponent,
-  ToolboxComponent,
-  CanvasRenderer,
-]);
+try {
+  echarts.use([
+    BarChart,
+    LineChart,
+    PieChart,
+    RadarChart,
+    TitleComponent,
+    TooltipComponent,
+    LegendComponent,
+    GridComponent,
+    DatasetComponent,
+    ToolboxComponent,
+    CanvasRenderer,
+  ]);
+} catch (err) {
+  console.warn("[useChart] echarts.use failed:", err);
+}
 
 let resizeHandler = null;
 const instances = new Set();

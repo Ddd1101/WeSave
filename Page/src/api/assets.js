@@ -58,3 +58,16 @@ export function getChanges({ start, end }) {
     .get("/assets/changes", { params: { start, end } })
     .then((r) => r.data);
 }
+
+// 生成模拟快照数据
+export function generateMock({
+  days_before = 30,
+  days_after = 30,
+  force = false,
+} = {}) {
+  return http
+    .post("/assets/generate-mock", null, {
+      params: { days_before, days_after, force },
+    })
+    .then((r) => r.data);
+}
