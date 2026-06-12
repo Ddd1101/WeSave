@@ -5,7 +5,7 @@ const assetsRouter = require("./routes/assets");
 const errorHandler = require("./middleware/error");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8088;
 
 app.use(cors());
 app.use(bodyParser.json({ limit: "10mb" }));
